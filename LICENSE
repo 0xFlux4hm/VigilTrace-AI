@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 0xFlux4hm
+Copyright (c) 2026 AOBH contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------
+
+NOTICE — AUTHORIZED SECURITY TESTING ONLY
+
+This software orchestrates active security testing against network targets.
+By installing or running it you represent that every target you point it at
+is covered by a written authorization (bug bounty program scope or signed
+pentest contract) and that you are the authorized tester. All target-facing
+traffic is routed through Burp Suite so scope, rate limits and audit trails
+are enforced outside this codebase as well; the account vault, reporting
+helpers and solver integrations must only be used within that authorization.
