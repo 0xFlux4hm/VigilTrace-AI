@@ -1,0 +1,23 @@
+{
+  "_comment": "Sample mission brief: the arguments the agent passes to mission_init, plus the operator-owned inputs that live OUTSIDE the agent's control.",
+  "mission_init": {
+    "target": "https://api.example.com",
+    "authorization_reference": "H1 program example-corp / pentest contract 2026-11-04",
+    "program_url": "https://hackerone.com/example-corp"
+  },
+  "budgets": {
+    "requests": 6000,
+    "fuzz": 500,
+    "tool_calls": 900,
+    "session_minutes": 240
+  },
+  "accounts": {
+    "per_target_max": 3,
+    "provisioning": "operator-provisioned; atap_create_account only with credentials from the operator"
+  },
+  "escalation": {
+    "tier3_requires": "approved request_approval record",
+    "notify": "mission_control(action=\"notify\", level=\"critical\")"
+  },
+  "scope_file": "examples/scope.example.md"
+}

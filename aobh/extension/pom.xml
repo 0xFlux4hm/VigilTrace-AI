@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AI Agent Bridge, Burp Suite extension (Montoya API).
+
+  VERIFIED BUILD PATH: python3 extension/build.py, run with its test flag
+  (the invocation is "python3 extension/build.py" plus the test flag). Maven is a
+  convenience for standard
+  workflows (IDE import, `mvn package`), but it is NOT the build path this repo
+  verifies: build.py pins the montoya-api jar by SHA-256, compiles at release 17
+  with -Xlint:all, verifies that every class file in the jar is version 61, and
+  runs the raw-socket self-test in 4 modes. Keep that invocation green before
+  trusting any other build.
+
+  Maven never packages the tool manifest: the verified build writes
+  build/classes/burp-tools.json from <repo>/aobh/tools/tools.json (see
+  write_resource in build.py). A jar packaged here must add that resource to the
+  classpath, or run build.py, or ToolRegistry.create fails at start with
+  "/burp-tools.json is missing from the jar".
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>dev.aobh</groupId>
+    <artifactId>burp-agent-bridge</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>AI Agent Bridge</name>
+    <description>Burp Suite extension (Montoya API) that exposes 15 scope-gated bridge tools to a local AI agent over authenticated loopback HTTP.</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>17</maven.compiler.release>
+    </properties>
+
+    <dependencies>
+        <!-- Provided: Burp supplies montoya-api at run time; it must not land inside the extension jar. -->
+        <dependency>
+            <groupId>net.portswigger.burp.extensions</groupId>
+            <artifactId>montoya-api</artifactId>
+            <version>2026.7</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>burp-agent-bridge</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>17</release>
+                    <compilerArgs>
+                        <arg>-Xlint:all</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <!-- Mirrors build.py's manifest so `java -jar burp-agent-bridge.jar` with the self-test argument works. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Implementation-Title>AI Agent Bridge</Implementation-Title>
+                            <Implementation-Version>${project.version}</Implementation-Version>
+                            <Main-Class>dev.agent.burp.standalone.StandaloneDemo</Main-Class>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

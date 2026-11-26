@@ -1,0 +1,2683 @@
+{
+  "meta": {
+    "name": "aobh-tools",
+    "version": "1.0.0",
+    "protocol": "MCP-style tool definitions (JSON Schema inputSchema per tool). Burp tools proxy to the Burp extension bridge; mission_*/rag_*/atap_*/waf_*/captcha_* tools run local engines agent-side, with all target-facing HTTP flowing through the bridge. The shipped rag/server.py serves all six groups. See IMPLEMENTATION.md.",
+    "response_envelope": "Every tool returns {\"ok\": true, \"data\": ...} or {\"ok\": false, \"error\": \"...\", \"hint\": \"...\"}. Responses are JSON.",
+    "rag": {
+      "corpus": "15,219 publicly disclosed HackerOne reports (428 programs, 215 vuln types, 3,241 paid) from github.com/reddelexc/hackerone-reports data.csv",
+      "storage": "local BM25 index + metadata (rag/index/reports.jsonl, built by rag/ingest_reports.py) — zero third-party dependencies",
+      "scoring": "BM25(title + 2x vuln_type + program) x signal boost (upvotes/bounty); slang synonym expansion (idor, ssrf, rce, sqli, ...)"
+    },
+    "atap": {
+      "purpose": "Autonomous Test Account Provisioning: policy-gated creation, email verification, authentication, session maintenance and end-of-engagement cleanup of test accounts for differential testing",
+      "enforcement": "signup/login/verify/cleanup HTTP flows through the Burp bridge (scoped, rate-limited, annotated 'ATAP ...'); credentials in an encrypted vault (atap vault v1: scrypt + HMAC-SHA256-CTR + integrity tag); tool output redacted (no passwords/sessions unless explicitly requested)",
+      "boundaries": "max 3 accounts per target (ATAP_MAX_ACCOUNTS); NO CAPTCHA/anti-bot/SMS circumvention — gated flows are marked human_assisted unless the explicitly authorized solver path (waf_captcha §12/captcha_solve strategy=service) applies; dedicated test mailbox strategies: imap (plus-addressing, real targets), catcher (local SMTP catcher, labs), manual; every account disclosed in the report and cleaned up at close-out",
+      "state": "accounts.json in ATAP_ENGAGEMENT_DIR (encrypted): lifecycle planned → created → awaiting_verification → verified → active → expired → locked → human_assisted → cleaned_up/deleted, with a full audit trail"
+    },
+    "waf_captcha": {
+      "purpose": "WAF/CDN handling (fingerprint, inert probe battery, ranked normalization transforms, budgeted bypass testing) and CAPTCHA handling (detect, sanctioned solve strategies, server-side validation-bypass testing)",
+      "enforcement": "all target HTTP through the Burp bridge with 'WAF probe / WAF bypass test / CAPTCHA ...' notes; probe/bypass budgets per host per engagement (WAF_PROBE_MAX=16, WAF_BYPASS_MAX=24); solver cap per engagement (CAPTCHA_MAX_SOLVES=5)",
+      "boundaries": "bypass testing = normal traffic volume, no IP rotation / TLS fingerprinting / rate-limit evasion — ever; automated CAPTCHA solving ONLY with operator-configured service key + per-call authorization_reference (human strategy is the default; tokens single-use, one flow each); a server accepting invalid tokens (omit/empty/dummy/replay) is a FINDING CANDIDATE — that is the test that matters, not solving",
+      "state": "waf_state.json + captcha_state.json in ATAP_ENGAGEMENT_DIR (plaintext budgets/solve log; solver key lives in env, never on disk)"
+    },
+    "mission_control": {
+      "purpose": "The control loop that orchestrates the other five groups: a dependency-aware task queue with prereq injection, event triggers (collaborator hits, WAF blocks, scope drift), an endpoint x vulnerability-class coverage matrix, durable target memory, an adversarial validator with confidence triage, duplicate detection, a budget governor, and human approval gates",
+      "enforcement": "paused/hard-paused missions yield no work from task_next (scope_drift/target_down pauses are operator-lifted only); Tier-3 tasks hold until an approval is APPROVED; exhausted budgets block testing tasks but never validation/report/cleanup; budget caps change only via mission_control action=budget with an operator_reference",
+      "state": "mission.json, tasks.json, coverage.json, memory.json, findings.json, approvals.json + append-only events/notifications/run_log .jsonl in ATAP_ENGAGEMENT_DIR — a fresh session resumes from these files alone (skill §13.8)",
+      "validator_policy": "score >= 90 validated (raise_issue authorized) | 60-89 needs_more_validation (kill-test task auto-enqueued) | < 60 watchlist (never raised); local duplicates (same class + same path/param) never raise twice"
+    },
+    "source_convention": "Tools that reference an existing request/response accept source: {\"type\": \"proxy\", \"id\": 123} for a Burp Proxy history item id, {\"type\": \"agent\", \"id\": \"a-17\"} for an agent-sent request (id returned by send_http_request / modify_and_resend_request / run_simple_fuzz), {\"type\": \"sitemap\", \"url\": \"https://…\", \"method\": \"GET\"} for a site map entry, or {\"type\": \"raw\", \"request\": \"GET / HTTP/1.1\\r\\nHost: ...\"} for an inline request (not readable with get_response — there is no stored response).",
+    "source_schema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "proxy",
+            "agent",
+            "sitemap",
+            "raw"
+          ],
+          "description": "proxy = Burp Proxy history item id; agent = agent-sent request log id; sitemap = site map entry by url + method; raw = inline raw request text."
+        },
+        "id": {
+          "description": "proxy: integer proxy history id; agent: string agent request id (e.g. a-17)."
+        },
+        "url": {
+          "type": "string",
+          "description": "sitemap: full URL of the entry."
+        },
+        "method": {
+          "type": "string",
+          "description": "sitemap: HTTP method of the entry (default GET)."
+        },
+        "request": {
+          "type": "string",
+          "description": "raw: full HTTP/1.1 request text."
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "safety_model": "The extension enforces: (1) scope gate — a request leaves the bridge only when its URL is covered by the agent authorization registry AND Burp's own scope and is not excluded; the gate runs on the URL Burp resolves (raw requests included) and a Host header naming another host is refused; (2) rate limit — default 2 req/s, configurable; (3) audit log — every agent-sent request is stored with the agent's note, annotated in Burp and optionally added to the site map so all actions stay visible; (4) budget counters — /health exposes requests_sent, fuzz_requests and the rejection counters, counted before each send so a budget can over-count, never under-count.",
+    "authorization": "FOR AUTHORIZED SECURITY TESTING ONLY. Wire this tool set up only for targets you have permission to test.",
+    "bridge": {
+      "name": "AI Agent Bridge — the Burp Suite extension (Montoya API) that serves the 17 Burp tools; built from extension/build.py",
+      "transport": "HTTP on the loopback interface, default http://127.0.0.1:8787. Requests carrying an Origin header or an unexpected Host header are refused (no browser page can drive the bridge); no CORS headers are ever sent.",
+      "auth": "Authorization: Bearer $BURP_BRIDGE_TOKEN is required on every endpoint, including /health. Without a token the extension does not start the server (fail closed).",
+      "endpoints": {
+        "GET /health": "200: {ok, extension, version, protocol_version, counters_version, instance, started_at, uptime_seconds, mode, burp_version, tools, rate_limit_per_second, scope_prefixes, counters, counters_note}",
+        "GET /tools": "{tools: [the 15 definitions], count, meta}",
+        "POST /tools/<name>": "body = JSON arguments → {ok: true, data} | {ok: false, error, hint}"
+      },
+      "counters": "counters_version 1: requests_sent (every request handed to Burp's HTTP stack, incremented before the send — failed attempts included), fuzz_requests (subset of requests_sent issued by run_simple_fuzz), redirect_following_requests (sends with follow_redirects != never; Burp does not expose the hop count), send_errors, tool_calls, tool_errors, rejected_out_of_scope, rejected_other.",
+      "counter_rules": [
+        "monotonic for the life of the process; never reset",
+        "key on instance (br-<UTC start>-<random>): a new id means Burp was restarted and that instance starts at zero — sum (last − baseline) per instance instead of reading one total",
+        "fuzz_requests is a subset of requests_sent; requests refused by the scope gate are not in requests_sent (they are in rejected_out_of_scope)",
+        "agent traffic only: requests the human sends through the Proxy are not counted"
+      ],
+      "tool_names": [
+        "get_proxy_history",
+        "get_site_map",
+        "search_history",
+        "extract_parameters",
+        "send_http_request",
+        "modify_and_resend_request",
+        "get_response",
+        "create_repeater_tab",
+        "get_scope",
+        "add_to_scope",
+        "remove_from_scope",
+        "run_simple_fuzz",
+        "get_collaborator_payload",
+        "poll_collaborator",
+        "raise_issue"
+      ]
+    },
+    "surface": 48,
+    "groups": {
+      "burp_bridge": 15,
+      "mission_control": 14,
+      "rag": 4,
+      "atap": 8,
+      "waf": 4,
+      "captcha": 3
+    },
+    "folding": {
+      "task_list": "mission_status already summarizes the queue; engine.task_list stays public for tests",
+      "check_duplicates": "validate_finding already runs local dedup; validate_finding(dedup_only=true) returns just the verdict",
+      "notify_operator": "mission_control(action=\"notify\", ...)",
+      "get_scanner_issues": "dropped from the bridge surface; scanner issues stay visible in Burp's UI",
+      "send_to_organizer": "dropped from the bridge surface; Organizer stays a manual Burp step"
+    }
+  },
+  "tools": [
+    {
+      "name": "get_proxy_history",
+      "description": "Reads Burp Proxy HTTP history — everything that passed through the proxy (the human's browsing plus agent traffic routed through it). Use this FIRST in recon: it shows what sessions, roles, endpoints and workflows already exist without sending anything to the target. Each item includes url, method, status, mime type, timing and ids you can pass to get_response or modify_and_resend_request. Apply filters to keep results under your token budget; start broad (limit 30), then narrow with url_contains / status_class / response_contains.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url_contains": {
+            "type": "string",
+            "description": "Regex matched against the full URL (e.g. '/api/v2/.*order')."
+          },
+          "method": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Filter by HTTP method(s), e.g. [\"POST\", \"PUT\"]."
+          },
+          "status_class": {
+            "type": "string",
+            "enum": [
+              "1xx",
+              "2xx",
+              "3xx",
+              "4xx",
+              "5xx"
+            ],
+            "description": "Response status class filter."
+          },
+          "status_code": {
+            "type": "integer",
+            "description": "Exact status code filter."
+          },
+          "has_response": {
+            "type": "boolean",
+            "description": "true = only items with a response, false = only without."
+          },
+          "request_contains": {
+            "type": "string",
+            "description": "Regex matched against the raw request (headers + body)."
+          },
+          "response_contains": {
+            "type": "string",
+            "description": "Regex matched against the response body (e.g. 'orderId|stack trace')."
+          },
+          "mimetype": {
+            "type": "string",
+            "description": "Mime type filter, e.g. 'JSON', 'HTML', 'SCRIPT' (Burp MimeType names)."
+          },
+          "in_scope_only": {
+            "type": "boolean",
+            "default": false,
+            "description": "Only items whose URL is currently in Burp scope."
+          },
+          "after": {
+            "type": "string",
+            "description": "ISO-8601 timestamp; only items after it."
+          },
+          "before": {
+            "type": "string",
+            "description": "ISO-8601 timestamp; only items before it."
+          },
+          "limit": {
+            "type": "integer",
+            "default": 50,
+            "maximum": 500,
+            "description": "Max items to return."
+          },
+          "offset": {
+            "type": "integer",
+            "default": 0,
+            "description": "Skip N matching items (pagination over the filtered set)."
+          },
+          "newest_first": {
+            "type": "boolean",
+            "default": true,
+            "description": "Newest entries first (default)."
+          },
+          "max_scan": {
+            "type": "integer",
+            "default": 20000,
+            "minimum": 1,
+            "description": "Upper bound on history items examined (and on items loaded for request_contains / response_contains). 'truncated' in the result tells you the scan stopped early."
+          }
+        }
+      },
+      "example": {
+        "name": "get_proxy_history",
+        "arguments": {
+          "url_contains": "/api/",
+          "method": [
+            "POST"
+          ],
+          "limit": 20
+        }
+      },
+      "returns": "items: [{proxy_id, time, method, url, status_code, response_length, mimetype, has_response, host, path, in_scope}], returned, matched, total_history, scanned, truncated, truncation_hint.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "get_site_map",
+      "description": "Reads Burp's site map: every request/response Burp has seen for a host tree, across ALL tools (Proxy, Repeater, scanner, extension traffic added via add_to_sitemap). Use it to enumerate endpoints that were never browsed directly, build the endpoint inventory in recon, and re-check what exists under a prefix after testing. Prefer url_prefix for efficiency; combine with in_scope_only to hard-limit to authorized surface.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url_prefix": {
+            "type": "string",
+            "description": "Return only entries under this URL prefix, e.g. 'https://api.example.com/v2'."
+          },
+          "in_scope_only": {
+            "type": "boolean",
+            "default": true,
+            "description": "Only URLs currently in Burp scope (default true — the site map can contain out-of-scope hosts)."
+          },
+          "method": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "HTTP method filter."
+          },
+          "status_class": {
+            "type": "string",
+            "enum": [
+              "1xx",
+              "2xx",
+              "3xx",
+              "4xx",
+              "5xx"
+            ]
+          },
+          "has_response": {
+            "type": "boolean"
+          },
+          "response_contains": {
+            "type": "string",
+            "description": "Regex against response body."
+          },
+          "with_params_only": {
+            "type": "boolean",
+            "default": false,
+            "description": "Only entries that carry query and/or body parameters."
+          },
+          "limit": {
+            "type": "integer",
+            "default": 100,
+            "maximum": 1000
+          },
+          "offset": {
+            "type": "integer",
+            "default": 0
+          },
+          "max_scan": {
+            "type": "integer",
+            "default": 50000,
+            "minimum": 1,
+            "description": "Upper bound on site map entries examined (and loaded for response_contains). 'truncated' in the result tells you the scan stopped early."
+          }
+        }
+      },
+      "example": {
+        "name": "get_site_map",
+        "arguments": {
+          "url_prefix": "https://api.example.com",
+          "with_params_only": true,
+          "limit": 100
+        }
+      },
+      "returns": "items: [{sitemap_id, method, url, status_code, mimetype, response_length, has_response, has_params, param_names, in_scope}], returned, matched, entries_under_prefix, scanned, truncated, truncation_hint.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "search_history",
+      "description": "Regex search across Proxy history AND the agent's own request log (requests and responses). This is the fastest way to find reflections of a marker value, token formats, error messages, id patterns, and interesting parameter values before any fuzzing — the skill mandates search before fuzz. Matches return surrounding context snippets so you can decide relevance without fetching full bodies. Case-insensitive by default.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Required. Regex searched in the selected parts."
+          },
+          "search": {
+            "type": "string",
+            "enum": [
+              "all",
+              "request",
+              "response",
+              "url"
+            ],
+            "default": "all",
+            "description": "Which part(s) to search."
+          },
+          "in_scope_only": {
+            "type": "boolean",
+            "default": true
+          },
+          "method": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status_class": {
+            "type": "string",
+            "enum": [
+              "1xx",
+              "2xx",
+              "3xx",
+              "4xx",
+              "5xx"
+            ]
+          },
+          "context_chars": {
+            "type": "integer",
+            "default": 120,
+            "description": "Characters of context shown around each match."
+          },
+          "max_matches_per_item": {
+            "type": "integer",
+            "default": 3
+          },
+          "limit": {
+            "type": "integer",
+            "default": 50,
+            "maximum": 300,
+            "description": "Max items returned."
+          },
+          "max_scan": {
+            "type": "integer",
+            "default": 20000,
+            "minimum": 1,
+            "description": "Upper bound on items examined (agent log entries plus proxy history items, newest first). 'truncated' in the result tells you the scan stopped early."
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      },
+      "example": {
+        "name": "search_history",
+        "arguments": {
+          "pattern": "eyJ[A-Za-z0-9_-]{10,}",
+          "search": "all",
+          "limit": 30
+        }
+      },
+      "returns": "matches: [{source_type (agent|proxy), source_id, url, method, status_code, match_count, matches: [{where (request|response|url), match, start, snippet}]}], count, scanned, truncated, truncation_hint.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "extract_parameters",
+      "description": "Enumerates every parameter of a request — query, body form fields, JSON properties (nested, with paths), cookies, multipart attributes, XML — with type, origin location and a ranked 'interestingness' classification (id-like, url-like, file-like, role-like, reflectable, state-changing). Use it on the highest-value endpoints before testing: this is how you pick insertion points for access-control and injection tests, and how you find the object ids you will swap. Reflection detection compares each value against the stored response.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/meta/source_schema",
+            "description": "Required. Where to read the request from (proxy id, agent id, or raw request string)."
+          },
+          "include_cookies": {
+            "type": "boolean",
+            "default": true,
+            "description": "Include cookie parameters (session cookies flagged, not classified as testable)."
+          },
+          "include_headers": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include notable headers (Authorization, Referer, Origin, X-Forwarded-*) as pseudo-parameters."
+          },
+          "deep_json": {
+            "type": "boolean",
+            "default": true,
+            "description": "Recurse into nested JSON and return dot/bracket paths (data.user.role)."
+          },
+          "check_reflection": {
+            "type": "boolean",
+            "default": true,
+            "description": "Mark parameters whose value appears verbatim in the response."
+          },
+          "max": {
+            "type": "integer",
+            "default": 100,
+            "description": "Max parameters returned, ranked most-interesting first."
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "example": {
+        "name": "extract_parameters",
+        "arguments": {
+          "source": {
+            "type": "proxy",
+            "id": 48211
+          },
+          "deep_json": true
+        }
+      },
+      "returns": "parameters: [{name, value_preview, location (query/body/json/multipart/xml/cookie/header), json_path if nested, filename (multipart), type_hint, flags (id_like, url_like, file_like, role_like, reflectable, state_changing, session_cookie), rank, testable}], total, returned, testable, url, method, ranking. Session cookies and credential headers are redacted in value_preview.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "send_http_request",
+      "description": "Sends a fully controlled HTTP request through Burp's HTTP stack (uses Burp's upstream proxy/TLS configuration; traffic is recorded, annotated and optionally added to the site map). This is your primary hand for crafted requests: bootstrapping recon GETs, logging in test accounts, error-condition probing, header tests. Build from parts (method/url/headers/body) for structured control, or pass raw_request for byte-exact control (request smuggling / parsing tests). Scope is enforced server-side; out-of-scope hosts are rejected with the reason. Redirects are NOT followed unless you ask (follow_redirects) — inspect them instead.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "default": "GET",
+            "description": "HTTP method. Arbitrary methods allowed (OPTIONS, PATCH, PROPFIND...)."
+          },
+          "url": {
+            "type": "string",
+            "description": "Required unless raw_request is given. Full URL including scheme."
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ]
+            },
+            "description": "Headers to add. Host and Content-Length are managed by Burp; the note is NOT a header — it is stored as the item's annotation in Burp and never sent on the wire."
+          },
+          "body": {
+            "type": "string",
+            "description": "Raw body string. Content-Type header should accompany it."
+          },
+          "cookie": {
+            "type": "string",
+            "description": "Convenience: value for a Cookie header (ignored if headers already include one)."
+          },
+          "raw_request": {
+            "type": "string",
+            "description": "Full raw HTTP/1.1 request text (byte-exact mode). Overrides method/headers/body/cookie. The destination comes from the Host header; pass url as well to set scheme/host/port (https, non-default ports)."
+          },
+          "follow_redirects": {
+            "type": "string",
+            "enum": [
+              "never",
+              "same_host",
+              "in_scope",
+              "always"
+            ],
+            "default": "never",
+            "description": "'in_scope'/'always' follow automatically; 'never' returns the redirect response itself (preferred for analysis)."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "default": 20,
+            "maximum": 120
+          },
+          "http2": {
+            "type": "boolean",
+            "default": false,
+            "description": "Prefer HTTP/2 for this request when the service supports it."
+          },
+          "verify_upstream_tls": {
+            "type": "boolean",
+            "default": true,
+            "description": "Honor Burp's upstream TLS validation settings."
+          },
+          "add_to_sitemap": {
+            "type": "boolean",
+            "default": true,
+            "description": "Register the exchange in Burp's site map with your note as the annotation (keeps actions visible in Target)."
+          },
+          "max_bytes": {
+            "type": "integer",
+            "default": 20000,
+            "minimum": 1,
+            "maximum": 200000,
+            "description": "Cap on the response body returned (UTF-8 bytes); response_length always reports the full size and response_truncated tells you if it was cut."
+          },
+          "note": {
+            "type": "string",
+            "description": "Required by skill convention: 'H#n <intent>'. Stored as the Burp annotation of the exchange and in the agent request log; never sent to the target."
+          }
+        },
+        "required": [
+          "note"
+        ]
+      },
+      "example": {
+        "name": "send_http_request",
+        "arguments": {
+          "method": "GET",
+          "url": "https://api.example.com/v2/orders/1042",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Bearer <session-token-userA>"
+            }
+          ],
+          "note": "H3 baseline order 1042 as userA"
+        }
+      },
+      "returns": "agent_id (use in other tools), method, url, host, path, status_code, reason, latency_ms, request_length, response_headers (trimmed), response_body (truncated per max_bytes), response_length, response_truncated, response_mimetype, redirect_location, annotation, time, note, follow_redirects, counted_as.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "modify_and_resend_request",
+      "description": "The workhorse of differential testing: take an existing request (proxy history item, agent request, or raw), apply precise modifications — set/remove headers, set/replace parameters, string replacements in the body (id swapping), method or path change — and send the modified version in one call. Single-variable changes per call; run baseline and variant and compare (status, length, body) to prove access-control and logic findings. Optionally drops the modified request into a new Repeater tab so the human can replay the exact variant.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/meta/source_schema",
+            "description": "Required. Request to base the modification on."
+          },
+          "set_headers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ]
+            },
+            "description": "Header values to set (update if present, add if missing). Setting to \"\" removes the header."
+          },
+          "remove_headers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Header names to remove (e.g. [\"Authorization\", \"Cookie\"] for auth-bypass checks)."
+          },
+          "set_params": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "location": {
+                  "type": "string",
+                  "enum": [
+                    "query",
+                    "body",
+                    "cookie",
+                    "json",
+                    "auto"
+                  ],
+                  "default": "auto"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ]
+            },
+            "description": "Parameters to set/update. location 'auto' finds the parameter wherever it lives; 'json' accepts dot paths (user.role)."
+          },
+          "remove_params": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Parameter names to remove (location auto)."
+          },
+          "replace_in_body": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "find": {
+                  "type": "string"
+                },
+                "replace_with": {
+                  "type": "string"
+                },
+                "max_occurrences": {
+                  "type": "integer",
+                  "default": 1
+                }
+              },
+              "required": [
+                "find",
+                "replace_with"
+              ]
+            },
+            "description": "Literal find/replace inside the body — the cleanest way to swap object ids or identifiers without re-parsing."
+          },
+          "replace_in_url": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "find": {
+                  "type": "string"
+                },
+                "replace_with": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "find",
+                "replace_with"
+              ]
+            },
+            "description": "Literal find/replace inside the URL path/query."
+          },
+          "method": {
+            "type": "string",
+            "description": "Override the HTTP method (e.g. GET -> POST method escalation tests)."
+          },
+          "url_override": {
+            "type": "string",
+            "description": "Send the modified request to a different URL entirely (same-host variants unless scope allows)."
+          },
+          "send_now": {
+            "type": "boolean",
+            "default": true,
+            "description": "Send immediately. If false, only the modified request and a scope_check are returned (dry run: nothing is sent or counted)."
+          },
+          "create_repeater_tab": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also open the modified request in a new Repeater tab named from note."
+          },
+          "max_bytes": {
+            "type": "integer",
+            "default": 20000,
+            "minimum": 1,
+            "maximum": 200000,
+            "description": "Cap on the response body returned (UTF-8 bytes)."
+          },
+          "note": {
+            "type": "string",
+            "description": "Required. 'H#n <intent>' annotation for the modified request (stored in Burp and the agent log; never sent to the target)."
+          }
+        },
+        "required": [
+          "source",
+          "note"
+        ]
+      },
+      "example": {
+        "name": "modify_and_resend_request",
+        "arguments": {
+          "source": {
+            "type": "proxy",
+            "id": 48211
+          },
+          "replace_in_body": [
+            {
+              "find": "\"orderId\":1042",
+              "replace_with": "\"orderId\":2077"
+            }
+          ],
+          "note": "H3 IDOR variant order 2077 as userA"
+        }
+      },
+      "returns": "modifications_applied (what each edit did), then the send_http_request shape, plus source and baseline_hint {source, agent_id, url, method, status_code, response_length, advice} describing the baseline for your diff; repeater_tab when requested. With send_now=false: dry_run, modified_request, scope_check {url, in_scope, reason}.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "get_response",
+      "description": "Fetches a stored request/response without re-sending anything: from the agent request log, proxy history, or the site map. Supports transforms so you can pull exactly what you need out of large responses: body-only mode, regex extraction with context, JSON path lookup, and truncation control. Cheaper and more reliable than re-requesting — the skill mandates this over redundant sends.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/meta/source_schema",
+            "description": "Required. Which exchange to read (agent id, proxy id, or a sitemap url+method); 'raw' is invalid here."
+          },
+          "part": {
+            "type": "string",
+            "enum": [
+              "all",
+              "request",
+              "response"
+            ],
+            "default": "response"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "default": 20000,
+            "description": "Truncate each returned part to this many bytes."
+          },
+          "json_path": {
+            "type": "string",
+            "description": "If the response is JSON, return only the value at this dot/bracket path (data.items[0].status)."
+          },
+          "regex_extract": {
+            "type": "string",
+            "description": "Return only regex matches (with context) from the selected part."
+          },
+          "include_headers": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include the raw header block of the selected part."
+          },
+          "decode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "none",
+              "base64"
+            ],
+            "default": "auto",
+            "description": "'auto' returns the body as Burp stored it (content-encoding already decoded where Burp could); 'base64' additionally decodes a whole-body base64 text ('decoded' tells you whether it applied); 'none' returns the stored text unchanged."
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "example": {
+        "name": "get_response",
+        "arguments": {
+          "source": {
+            "type": "agent",
+            "id": "a-17"
+          },
+          "part": "response",
+          "json_path": "data.user.role"
+        }
+      },
+      "returns": "source, agent_id, url, method, status_code, response_headers, request (part=all/request), response (per part), request_truncated / response_truncated, response_length; with json_path: json_value; with regex_extract: matches [{where, match, start, snippet}] and match_count (no full bodies).",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "create_repeater_tab",
+      "description": "Materializes a request as a named tab in Burp Repeater so the human can see, edit and replay it. Use it to: preserve stateful request sequences you want the human to verify, park the best evidence for each finding (name it 'F-01 <slug>'), and stage requests you will iterate on manually. Names are prefixed 'AGENT — ' and deduplicated by the extension so agent tabs stay identifiable. Note: the Montoya API places requests (not responses) into Repeater; attach context via the note.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/meta/source_schema",
+            "description": "Either a stored source (proxy/agent id) or raw_request below."
+          },
+          "raw_request": {
+            "type": "string",
+            "description": "Full raw request text; overrides source."
+          },
+          "tab_name": {
+            "type": "string",
+            "default": "untitled",
+            "description": "Human-meaningful tab name, e.g. 'H3 IDOR userB 2077' or 'F-01 order cross-read'."
+          },
+          "note": {
+            "type": "string",
+            "description": "Optional context note stored with the tab annotation."
+          }
+        }
+      },
+      "example": {
+        "name": "create_repeater_tab",
+        "arguments": {
+          "source": {
+            "type": "agent",
+            "id": "a-42"
+          },
+          "tab_name": "F-01 order cross-read userB"
+        }
+      },
+      "returns": "tab_name (AGENT — <name>, deduplicated), note, source, url, request_preview (request line + headers), sent (false), counted (false).",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "get_scope",
+      "description": "Returns the current Burp scope plus the agent's authorized-target registry: every prefix authorized in scope.md, every prefix added via add_to_scope, and an in-scope verdict for the URLs you pass. Call it at bootstrap (Phase 0), after any scope change, and before working on any new host. This is the tool that keeps you legal — reconcile mismatches immediately.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "check_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional URLs to test against the current scope (isInScope verdict per URL)."
+          }
+        }
+      },
+      "example": {
+        "name": "get_scope",
+        "arguments": {
+          "check_urls": [
+            "https://api.example.com/v2/orders",
+            "https://internal.example.com/"
+          ]
+        }
+      },
+      "returns": "agent_registry: [{prefix, added_at, added_by, added_from}], burp_scope: [{prefix, enabled, in_burp_scope, source}], excluded, checks: [{url, in_scope, in_burp_scope, in_registry, excluded_by}], mismatch_warnings, events (last 20), gate.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "add_to_scope",
+      "description": "Adds a URL prefix to Burp's scope AND to the agent's authorization registry, with provenance (added_from = where the authorization for it came from). Only add prefixes that the authorization artifact covers. The extension refuses prefixes outside the registry you declare at bootstrap unless bootstrap_override=true is used once to establish the initial authorized set. Every addition is logged so the report can show exactly what was authorized when.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url_prefix": {
+            "type": "string",
+            "description": "Required. Prefix to add, e.g. 'https://api.example.com/v2'."
+          },
+          "added_from": {
+            "type": "string",
+            "description": "Required. Where authorization comes from: 'scope.md line N', 'program policy <url>', 'user statement <date>'."
+          },
+          "bootstrap_override": {
+            "type": "boolean",
+            "default": false,
+            "description": "Set true only during Phase 0 to seed the initial authorized set from scope.md."
+          }
+        },
+        "required": [
+          "url_prefix",
+          "added_from"
+        ]
+      },
+      "example": {
+        "name": "add_to_scope",
+        "arguments": {
+          "url_prefix": "https://api.example.com/",
+          "added_from": "scope.md#authorized-prefixes"
+        }
+      },
+      "returns": "added, added_from, bootstrap_override, agent_registry, burp_scope_after, mismatch_warnings, reminder. Widening the registry without bootstrap_override=true is refused with prefix_not_authorized; sub-paths of authorized prefixes are always allowed.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "remove_from_scope",
+      "description": "Removes a prefix from Burp's scope (and, if requested, from the agent registry). Use it when you discover a host that must NOT be touched (out-of-scope asset discovered via redirect or link), or when the user narrows the engagement. Removal is immediate and logged.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url_prefix": {
+            "type": "string",
+            "description": "Required. Prefix to exclude."
+          },
+          "drop_from_registry": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also remove from the agent's authorization registry (only if it was never authorized)."
+          }
+        },
+        "required": [
+          "url_prefix"
+        ]
+      },
+      "example": {
+        "name": "remove_from_scope",
+        "arguments": {
+          "url_prefix": "https://internal.example.com/"
+        }
+      },
+      "returns": "removed, drop_from_registry, agent_registry, burp_scope_after, gate.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "run_simple_fuzz",
+      "description": "Bounded, single-threaded fuzzing in the Burp tradition: take a request template containing the {{FUZZ}} marker, substitute one payload per request, send them sequentially at a controlled rate, and collect per-payload results with early-stop conditions. This is your Intruder-shaped tool for insertion-point testing (injection presets, id swaps, redirect params, boolean diffs). It is NOT a mass scanner: payloads are capped, delay is enforced, every request is annotated and logged, and in-scope is mandatory. Load the preset payloads, set a stop_on response_regex when you know the true-positive signature, and keep runs under 200 requests.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request_template": {
+            "type": "string",
+            "description": "Required. Raw request text containing exactly one literal marker {{FUZZ}} (insertable anywhere: path, query, body, header value). {{ORIG}} may also be used to reference the original value for boolean-diff payloads (then pass orig_value)."
+          },
+          "orig_value": {
+            "type": "string",
+            "description": "The parameter's original value, substituted for every {{ORIG}} in the template (required when the template uses {{ORIG}})."
+          },
+          "url": {
+            "type": "string",
+            "description": "Optional service URL (scheme, host, port) for the template — needed when the template should go to https or a non-default port; otherwise the Host header decides."
+          },
+          "payloads": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Explicit payload list (max 200). Exactly one of payloads / payload_preset required."
+          },
+          "payload_preset": {
+            "type": "string",
+            "enum": [
+              "sqli_error_based",
+              "xss_reflected_basic",
+              "path_traversal_basic",
+              "command_injection_benign",
+              "open_redirect",
+              "ssrf_oob",
+              "param_boolean_diff",
+              "idor_id_swaps",
+              "template_injection_basic"
+            ],
+            "description": "Built-in benign payload set. 'ssrf_oob' automatically injects a fresh Collaborator payload per request."
+          },
+          "stop_on": {
+            "type": "object",
+            "properties": {
+              "status_code": {
+                "type": "integer"
+              },
+              "response_regex": {
+                "type": "string",
+                "description": "Stop when a response body matches (true-positive signature)."
+              },
+              "collaborator_hit": {
+                "type": "boolean",
+                "description": "Stop when any payload's Collaborator interaction arrives (checked between requests)."
+              }
+            },
+            "description": "Early-stop conditions. Fuzzing without a stop condition should be reserved for diff-based presets."
+          },
+          "delay_ms": {
+            "type": "integer",
+            "default": 250,
+            "minimum": 100,
+            "description": "Delay between requests; the extension enforces the minimum and the global rate limit."
+          },
+          "max_requests": {
+            "type": "integer",
+            "default": 100,
+            "maximum": 200
+          },
+          "note_prefix": {
+            "type": "string",
+            "description": "Required. Annotation prefix for all generated requests, e.g. 'H3 sqli orderId'."
+          },
+          "also_send_to_intruder": {
+            "type": "boolean",
+            "default": false,
+            "description": "Additionally push the template into Burp Intruder (marked with §positions§) so the human can run a heavier attack deliberately."
+          }
+        },
+        "required": [
+          "request_template",
+          "note_prefix"
+        ]
+      },
+      "example": {
+        "name": "run_simple_fuzz",
+        "arguments": {
+          "request_template": "GET /v2/orders?sort={{FUZZ}} HTTP/1.1\r\nHost: api.example.com\r\nCookie: session=<session-token>\r\n\r\n",
+          "payload_preset": "sqli_error_based",
+          "stop_on": {
+            "response_regex": "(SQL|sqlite|syntax error|ORA-)"
+          },
+          "max_requests": 20,
+          "note_prefix": "H5 sqli orders.sort"
+        }
+      },
+      "returns": "run_id (f-N), preset, total_sent, send_failures, planned, payloads_available, payloads_truncated, stopped_early, stop_reason, results: [{index, payload_preview, status_code, response_length, match, latency_ms, agent_id, collaborator_payload_id}], collaborator_payloads, collaborator_hits, collaborator_check, delay_ms, elapsed_ms, budget {requests_sent, fuzz_requests}. Every request is counted in requests_sent AND fuzz_requests; a payload that moves the request out of scope stops the run with an out_of_scope error (the requests before it stay logged).",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "get_collaborator_payload",
+      "description": "Generates Burp Collaborator payload(s) — unique hostnames that record out-of-band interactions (DNS, HTTP, SMTP) from the target. This is the only permitted external touch: paste the returned string into url-like parameters, XML external entities, webhook fields, or Host-adjacent headers, trigger it in-target, then poll with poll_collaborator. Payloads are labeled with your hypothesis id so interactions can be attributed. The client's secret key is persisted by the extension so interactions survive Burp restarts within the engagement.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "default": 1,
+            "maximum": 20,
+            "description": "Number of distinct payloads to generate."
+          },
+          "note": {
+            "type": "string",
+            "description": "Label, e.g. 'H4 ssrf preview.url'. Interactions come back tagged with it."
+          }
+        }
+      },
+      "example": {
+        "name": "get_collaborator_payload",
+        "arguments": {
+          "count": 2,
+          "note": "H4 ssrf preview.url"
+        }
+      },
+      "returns": "payloads: [{payload_id, payload (hostname string, e.g. abc123xyz.oast.example), note, generated_at}].",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "poll_collaborator",
+      "description": "Polls Collaborator for interactions recorded against generated payloads. Call it ≥60 seconds after triggering an OOB payload, again after further delay, and once more before closing the engagement. DNS-only interactions prove reachability but may indicate NAT/egress quirks; HTTP interactions (with request details) are the strong signal for SSRF/XXE/blind-XSS confirmation. Filter by payload id or search all payloads since a timestamp.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "payload_id": {
+            "type": "string",
+            "description": "Restrict to one payload (returned by get_collaborator_payload). Omit for all payloads."
+          },
+          "interaction_type": {
+            "type": "string",
+            "enum": [
+              "dns",
+              "http",
+              "smtp"
+            ],
+            "description": "Filter by interaction type."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "default": 0,
+            "maximum": 120,
+            "description": "Block up to N seconds while polling (0 = poll and return immediately)."
+          },
+          "since": {
+            "type": "string",
+            "description": "ISO-8601 timestamp; only interactions after it."
+          },
+          "limit": {
+            "type": "integer",
+            "default": 50
+          }
+        }
+      },
+      "example": {
+        "name": "poll_collaborator",
+        "arguments": {
+          "payload_id": "abc123xyz",
+          "wait_seconds": 30
+        }
+      },
+      "returns": "interactions: [{payload_id, note, type, time, client_ip, client_port, summary (DNS query type / HTTP request line + headers excerpt / SMTP envelope), details_available}], count, total_matches, truncated, known_payload, waited_seconds, hint.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "raise_issue",
+      "description": "Registers a VALIDATED finding as a real issue in Burp (site map issues list + extension log) with full evidence attached. This is the formal output of the validation gauntlet — never call it for unconfirmed hypotheses; those go into test-plan.md as INCONCLUSIVE instead. Severity uses the report's model (CRITICAL is stored as HIGH in Burp with a 'Critical' marker in the detail, because Burp's issue model has no critical level). Evidence items reference agent/proxy request ids; the extension attaches the actual request/response pairs so the issue is replayable in Burp.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Required. Precise, specific title, e.g. 'IDOR: cross-account order read via orderId (userA -> userB)'."
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info"
+            ],
+            "description": "Required. Calibrated per the validation gauntlet, not per enthusiasm."
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "certain",
+              "firm",
+              "tentative"
+            ],
+            "description": "Required. CERTAIN = deterministic repro; FIRM = consistent; TENTATIVE = needs human review (discouraged here — use test-plan.md instead)."
+          },
+          "url": {
+            "type": "string",
+            "description": "Required. Affected endpoint (baseUrl for the issue)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Required. What the flaw is, why it exists, and the impact chain you demonstrated."
+          },
+          "remediation": {
+            "type": "string",
+            "description": "Specific, actionable fix guidance."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "$ref": "#/meta/source_schema"
+                },
+                "step": {
+                  "type": "string",
+                  "description": "What this exchange demonstrates, e.g. 'baseline as userA — 200 with order data'."
+                }
+              },
+              "required": [
+                "source",
+                "step"
+              ]
+            },
+            "description": "At least one evidence item for HIGH/critical; the pairs are attached to the Burp issue."
+          },
+          "reproduction": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered reproduction steps for the report."
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "agent-validated",
+              "burp-scanner",
+              "needs-human-review"
+            ],
+            "default": "agent-validated"
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "CWE ids or program-policy sections that genuinely apply."
+          }
+        },
+        "required": [
+          "title",
+          "severity",
+          "confidence",
+          "url",
+          "description"
+        ]
+      },
+      "example": {
+        "name": "raise_issue",
+        "arguments": {
+          "title": "IDOR: cross-account order read via orderId",
+          "severity": "high",
+          "confidence": "certain",
+          "url": "https://api.example.com/v2/orders/1042",
+          "description": "Order detail endpoint trusts the orderId path parameter without ownership check... (impact chain)",
+          "remediation": "Enforce object-level authorization (owner check) server-side for every order read.",
+          "evidence": [
+            {
+              "source": {
+                "type": "agent",
+                "id": "a-17"
+              },
+              "step": "baseline as userA: 200, own order"
+            },
+            {
+              "source": {
+                "type": "agent",
+                "id": "a-21"
+              },
+              "step": "userA requests userB's order 2077: 200, userB data returned"
+            }
+          ],
+          "reproduction": [
+            "Login as userA",
+            "GET /v2/orders/2077 with userA session",
+            "Response contains userB name/address"
+          ]
+        }
+      },
+      "returns": "issue_id (agent-issue-N), url, severity, severity_stored, confidence_stored, evidence_attached (count), provenance, report_pointer.",
+      "group": "burp_bridge"
+    },
+    {
+      "name": "mission_init",
+      "description": "Initialize the mission: registers target + authorization artifact, declares budgets (default 600 requests / 200 fuzz / 240 min / 2000 tool calls), seeds the bootstrap task queue (scope reconcile → recon → WAF fingerprint → RAG briefing → coverage seed). M-0 checkpoint (skill §13.2). Refuses to shadow an existing active mission — resume instead via mission_status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "In-scope base URL, e.g. https://app.example.com"
+          },
+          "authorization_reference": {
+            "type": "string",
+            "description": "Required. Where permission comes from: program URL, scope.md, or the user's verbatim statement."
+          },
+          "program_url": {
+            "type": "string",
+            "description": "Program/policy URL for the audit trail."
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "0-bootstrap",
+              "1-recon",
+              "2-prioritize",
+              "3-test",
+              "4-validate",
+              "5-report"
+            ],
+            "default": "0-bootstrap"
+          },
+          "budgets": {
+            "type": "object",
+            "description": "Optional overrides {max_requests, max_fuzz_requests, max_session_minutes, max_tool_calls} — positive numbers."
+          },
+          "seed_tasks": {
+            "type": "boolean",
+            "default": true,
+            "description": "Auto-seed the five bootstrap tasks."
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "authorization_reference"
+        ]
+      },
+      "example": {
+        "name": "mission_init",
+        "arguments": {
+          "target": "https://api.example.com",
+          "authorization_reference": "scope.md — program policy fetched 2026-11-26",
+          "program_url": "https://example.com/security/program"
+        }
+      },
+      "returns": "mission doc (id, budgets, counters) + seeded task ids + next-step guidance.",
+      "group": "mission_control"
+    },
+    {
+      "name": "mission_status",
+      "description": "The dashboard — call it at every checkpoint and whenever unsure what to do next: mission state, budget verdict, queue counts + top ready tasks with playbook hints, coverage summary, findings triage, pending approvals, recent events/notifications, orphaned running tasks from a crashed session, and a concrete next_action recommendation. Tier 0, free, always allowed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "queue",
+                "budget",
+                "coverage",
+                "findings",
+                "approvals",
+                "events",
+                "notifications",
+                "pause"
+              ]
+            },
+            "description": "Optional trim; default all sections."
+          }
+        }
+      },
+      "example": {
+        "name": "mission_status",
+        "arguments": {}
+      },
+      "returns": "mission summary + budget verdict + queue/coverage/findings/approvals state + next_action.",
+      "group": "mission_control"
+    },
+    {
+      "name": "mission_control",
+      "description": "Mission lifecycle operations: pause/resume, resolve_pause (operator only — lifts the hard pauses raised by scope_drift/target_down events), abort, end (honest close-out summary), checkpoint, phase transition, budget changes (operator_reference required — the agent cannot raise its own caps), and approve/deny for pending approval requests.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "resolve_pause",
+              "abort",
+              "end",
+              "checkpoint",
+              "phase",
+              "budget",
+              "approve",
+              "deny",
+              "notify"
+            ],
+            "description": "Required. Lifecycle operation."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why (pause/abort/end) or which pause id/type to resolve (resolve_pause)."
+          },
+          "operator_reference": {
+            "type": "string",
+            "description": "Required for resolve_pause/budget/approve/deny: the operator's verbatim statement or decision + date."
+          },
+          "budget": {
+            "type": "object",
+            "description": "action=budget: {max_requests, max_fuzz_requests, max_session_minutes, max_tool_calls} — new cap values."
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "0-bootstrap",
+              "1-recon",
+              "2-prioritize",
+              "3-test",
+              "4-validate",
+              "5-report"
+            ],
+            "description": "action=phase: set the current phase."
+          },
+          "approval_id": {
+            "type": "string",
+            "description": "action=approve|deny: the APR-nn id."
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "action=end: cancel non-terminal tasks into the end summary."
+          },
+          "note": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warn",
+              "critical"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "requires_ack": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "example": {
+        "name": "mission_control",
+        "arguments": {
+          "action": "resolve_pause",
+          "reason": "scope_drift",
+          "operator_reference": "operator 2026-11-26 14:05 UTC: internal.example.com is out of scope, stay on api."
+        }
+      },
+      "returns": "action result (status/pause reasons/checkpoint/budget/approval) + audit notification.",
+      "group": "mission_control"
+    },
+    {
+      "name": "task_enqueue",
+      "description": "Add work to the orchestrated queue: {type, title, priority 0-4, tier 0-3, deps [T-nn], params, hypothesis, max_attempts}. With auto_prereqs the planner injects dependency tasks automatically (WAF probe before payload-bearing work on an unprobed host; account provisioning before authenticated work when no active test accounts exist). Blocking dependencies make the queue self-sequencing — enqueue everything, execute in task_next order.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "description": "e.g. test_hypothesis, investigate_oob, waf_bypass_eval, captcha_handle, atap_provision, coverage_fill, validate_step, report_section, generic"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4,
+                  "description": "0 critical ... 4 backlog."
+                },
+                "tier": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 3,
+                  "description": "Rules-of-engagement tier (§5.1); tier 3 requires operator approval."
+                },
+                "deps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Task ids that must be done first."
+                },
+                "params": {
+                  "type": "object",
+                  "description": "Execution parameters; host/authenticated/payload_bearing drive prereq injection."
+                },
+                "hypothesis": {
+                  "type": "string"
+                },
+                "max_attempts": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5,
+                  "description": "Auto-requeue budget before failed-final (default 3)."
+                }
+              },
+              "required": [
+                "title"
+              ]
+            }
+          },
+          "auto_prereqs": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "tasks"
+        ]
+      },
+      "example": {
+        "name": "task_enqueue",
+        "arguments": {
+          "tasks": [
+            {
+              "type": "test_hypothesis",
+              "title": "IDOR order 1042→2077 as userA vs userB",
+              "priority": 1,
+              "tier": 2,
+              "params": {
+                "host": "api.example.com",
+                "authenticated": true,
+                "payload_bearing": false
+              },
+              "hypothesis": "orderId not ownership-checked"
+            }
+          ]
+        }
+      },
+      "returns": "created tasks with ids/status/deps + injected prereqs + queue counts.",
+      "group": "mission_control"
+    },
+    {
+      "name": "task_next",
+      "description": "The planner's hand: returns the highest-priority ready task (dependencies satisfied) with its playbook hint, claims it as running, and enforces the gates — paused/hard-paused missions yield nothing, exhausted budgets yield only close-out tasks, Tier-3 tasks auto-create an approval request and hold until approved. Also surfaces orphaned running tasks from a crashed session (reclaim via task_update).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "default": 1,
+            "maximum": 10
+          },
+          "claim": {
+            "type": "boolean",
+            "default": true,
+            "description": "Mark returned tasks running (resume-safe: orphans are detected by staleness)."
+          }
+        }
+      },
+      "example": {
+        "name": "task_next",
+        "arguments": {
+          "claim": true
+        }
+      },
+      "returns": "claimed task(s) with playbook hints + queue counts + budget verdict + orphans; or {blocked, hint}.",
+      "group": "mission_control"
+    },
+    {
+      "name": "task_update",
+      "description": "Close the loop on a claimed task: done (with structured result — the queue unblocks dependents), failed (auto-requeued while attempts < max_attempts, then failed-final blocks dependents), cancelled, running. Attach evidence_refs (agent/proxy ids) so the result is replayable. Update test-plan.md alongside — the queue is the plan of record.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Required. e.g. T-007."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "done",
+              "failed",
+              "cancelled",
+              "pending_approval"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "description": "Structured outcome, e.g. {outcome: \"PASS\", evidence: \"a-21 vs a-17\", summary: \"...\"}."
+          },
+          "error": {
+            "type": "string",
+            "description": "For failed: what went wrong (kept across auto-retries)."
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      },
+      "example": {
+        "name": "task_update",
+        "arguments": {
+          "task_id": "T-007",
+          "status": "done",
+          "result": {
+            "outcome": "PASS",
+            "summary": "userA reads userB order — F-01 candidate"
+          },
+          "evidence_refs": [
+            "a-17",
+            "a-21"
+          ]
+        }
+      },
+      "returns": "task state after transition + queue counts (auto-retry/dep-release visible).",
+      "group": "mission_control"
+    },
+    {
+      "name": "coverage_update",
+      "description": "Record a cell in the coverage matrix (endpoint × vulnerability class): states untested / in_progress / tested_clean / vulnerable / na. Registers the endpoint on first touch. vulnerable cells notify and should be followed by validate_finding. This matrix is what makes the hunt self-directing: gaps drive the queue (coverage_gaps), and the report's 'what was tested and not found' section falls out of it (§7.2).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "Full URL; method defaults GET, path parsed from it."
+              },
+              "method": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "host": {
+                "type": "string"
+              },
+              "auth": {
+                "type": "string",
+                "description": "e.g. 'userA session' / 'anonymous'."
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "value_flow": {
+                "type": "string",
+                "description": "money/entitlements/files/user-data — boosts gap ranking."
+              }
+            },
+            "description": "Required. {url} or {method, path, host}."
+          },
+          "vuln_class": {
+            "type": "string",
+            "enum": [
+              "access_control",
+              "auth_session",
+              "injection",
+              "ssrf_oob",
+              "business_logic",
+              "xss",
+              "file_upload",
+              "mass_assignment",
+              "captcha_validation",
+              "info_disclosure",
+              "misconfiguration",
+              "open_redirect",
+              "rate_limiting"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "untested",
+              "in_progress",
+              "tested_clean",
+              "vulnerable",
+              "na"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "description": "agent/proxy ids or finding id."
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "vuln_class",
+          "state"
+        ]
+      },
+      "example": {
+        "name": "coverage_update",
+        "arguments": {
+          "endpoint": {
+            "url": "https://api.example.com/v2/orders/1042",
+            "auth": "userA",
+            "value_flow": "orders"
+          },
+          "vuln_class": "access_control",
+          "state": "vulnerable",
+          "evidence": "a-17/a-21"
+        }
+      },
+      "returns": "endpoint key + cell + per-class coverage summary.",
+      "group": "mission_control"
+    },
+    {
+      "name": "coverage_gaps",
+      "description": "Ranked untested cells (class weight + endpoint weight: value flows and auth'd endpoints first, state-changing methods +1). This is the self-scheduling engine: run it when the queue runs dry — with auto_seed=true it enqueues test_hypothesis tasks for the top gaps so the next task_next call has prioritized work.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "default": 10,
+            "maximum": 40
+          },
+          "auto_seed": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enqueue a test_hypothesis task per gap."
+          },
+          "tier": {
+            "type": "integer",
+            "default": 2,
+            "description": "Tier for seeded tasks (2 = active testing)."
+          }
+        }
+      },
+      "example": {
+        "name": "coverage_gaps",
+        "arguments": {
+          "auto_seed": true,
+          "limit": 5
+        }
+      },
+      "returns": "ranked gaps [{endpoint, vuln_class, score}] + seeded task ids + per-class summary.",
+      "group": "mission_control"
+    },
+    {
+      "name": "event_emit",
+      "description": "Feed an observation to the trigger engine — this is how findings push work instead of the agent polling: collaborator_hit → priority-0 OOB investigation task; waf_block → memory + budgeted bypass eval; rate_limited → backoff task; new_surface → coverage seeding; captcha_challenge → C-0 handling; account_state expired → A-2 health check; scope_drift / target_down → HARD PAUSE + operator notification. Custom one-off work via spawn_task.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Required. collaborator_hit | new_surface | waf_block | rate_limited | scope_drift | target_down | captcha_challenge | account_state | target_up | custom"
+          },
+          "payload": {
+            "type": "object",
+            "description": "Event facts: {payload_id, summary} / {host, detail, request} / {url} / {account_id, state} / {minutes} ..."
+          },
+          "source": {
+            "type": "string",
+            "description": "who observed it: agent | bridge | atap | waf | operator."
+          },
+          "spawn_task": {
+            "type": "object",
+            "description": "Optional custom task to enqueue from this event {type, title, priority, tier, params}."
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "example": {
+        "name": "event_emit",
+        "arguments": {
+          "type": "collaborator_hit",
+          "payload": {
+            "payload_id": "abc123xyz",
+            "summary": "DNS + HTTP interaction from 10.0.0.7"
+          },
+          "source": "agent"
+        }
+      },
+      "returns": "event record (E-nn) + spawned task ids + effects (pause/notification) + mission status now.",
+      "group": "mission_control"
+    },
+    {
+      "name": "memory_save",
+      "description": "Persist a target fact that must survive sessions: quirk (target behaves oddly — 'WAF blocks all references'), intel (structure: 'v2 API lacks rate limiting'), failure ('payload X already failed on /login — do not retry'), decision, preference. The point: a fresh session inherits everything the hunt learned, so re-work never happens.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "quirk",
+              "intel",
+              "failure",
+              "decision",
+              "preference"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Required. One specific fact, not a diary entry."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. [\"waf\", \"api.example.com\"]."
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "agent/proxy ids, finding/task ids."
+          },
+          "endpoint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ]
+      },
+      "example": {
+        "name": "memory_save",
+        "arguments": {
+          "kind": "failure",
+          "text": "sqli preset on /v2/orders.sort produced nothing — WAF strips quotes; use comment-splitting via waf_adapt",
+          "tags": [
+            "sqli",
+            "api.example.com"
+          ]
+        }
+      },
+      "returns": "stored memory item (id M-nn) for referencing.",
+      "group": "mission_control"
+    },
+    {
+      "name": "memory_search",
+      "description": "Recall target memory by free-text query, kind or tag — call at bootstrap (resume protocol §13.8), before retrying a failed approach, and when a familiar quirk reappears. Returns scored matches; empty query returns the most recent items.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "quirk",
+              "intel",
+              "failure",
+              "decision",
+              "preference"
+            ]
+          },
+          "tag": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "default": 10,
+            "maximum": 50
+          }
+        }
+      },
+      "example": {
+        "name": "memory_search",
+        "arguments": {
+          "query": "waf orders sort",
+          "limit": 5
+        }
+      },
+      "returns": "scored matches + total memory count.",
+      "group": "mission_control"
+    },
+    {
+      "name": "budget_status",
+      "description": "Budget governor readout: usage vs caps (requests, fuzz, tool calls, session minutes) with warn(≥80%) and exhausted(≥100%) flags, observed pace (requests/hour) and projected time to the request cap, plus the enforcement recommendation. Syncs counters from the bridge's /health when it exposes them; otherwise pass note_requests/note_fuzz with the counts you observed (send calls + fuzz total_sent) to keep the governor honest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "note_requests": {
+            "type": "integer",
+            "default": 0,
+            "description": "Target requests sent since the last call (1 per send_http_request / modify_and_resend_request)."
+          },
+          "note_fuzz": {
+            "type": "integer",
+            "default": 0,
+            "description": "Fuzz payloads from run_simple_fuzz total_sent."
+          }
+        }
+      },
+      "example": {
+        "name": "budget_status",
+        "arguments": {
+          "note_requests": 14,
+          "note_fuzz": 20
+        }
+      },
+      "returns": "verdict ok|warn|exhausted + per-budget rows + pace + projection + recommendation + bridge sync note.",
+      "group": "mission_control"
+    },
+    {
+      "name": "request_approval",
+      "description": "Create a human approval gate for a risky action (Tier-3 by policy: payloads reaching other users, blind-XSS to admins, race-condition tests, mass OOB — or anything the skill flags). Writes a critical notification, optionally parks a task in pending_approval, and the agent MUST NOT proceed until mission_status shows the approval approved. Batch related asks into one request — the operator's time is the scarcest budget.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Required. Concrete ask: 'Blind-XSS payload to admin panel on app.example.com'."
+          },
+          "action": {
+            "type": "string",
+            "description": "Required. The gated action/tool."
+          },
+          "params": {
+            "type": "object"
+          },
+          "risk_tier": {
+            "type": "integer",
+            "default": 3,
+            "minimum": 0,
+            "maximum": 3
+          },
+          "context": {
+            "type": "string",
+            "description": "Why it is needed + what could go wrong — the operator decides from this."
+          },
+          "block_task_id": {
+            "type": "string",
+            "description": "T-nn to park until decided."
+          }
+        },
+        "required": [
+          "title",
+          "action"
+        ]
+      },
+      "example": {
+        "name": "request_approval",
+        "arguments": {
+          "title": "Blind-XSS payload to admin panel (reaches other users)",
+          "action": "send_http_request",
+          "risk_tier": 3,
+          "context": "P6 stored-XSS proof requires an admin view; payload renders only alert-box, no exfil",
+          "block_task_id": "T-012"
+        }
+      },
+      "returns": "approval record (APR-nn, pending) + the no-proceed rule.",
+      "group": "mission_control"
+    },
+    {
+      "name": "validate_finding",
+      "description": "The adversarial validator between 'candidate' and 'finding': scores the declared evidence (differential pair, OOB interaction, cold reproductions, server-side effect, attached pairs, mechanism clarity — minus single-observation/client-side/environment penalties) into a 0-100 score, lists the class-specific kill tests still outstanding, cross-checks duplicates locally and against Burp's scanner issues, and triages: ≥90 validated (raise_issue authorized) · 60-89 needs_more_validation (kill-test task auto-enqueued) · <60 watchlist (never raised). The gauntlet in §6 stays mandatory — this scores it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "finding": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "vuln_class": {
+                "type": "string",
+                "enum": [
+                  "access_control",
+                  "auth_session",
+                  "injection",
+                  "ssrf_oob",
+                  "business_logic",
+                  "xss",
+                  "file_upload",
+                  "mass_assignment",
+                  "captcha_validation",
+                  "info_disclosure",
+                  "misconfiguration",
+                  "open_redirect",
+                  "rate_limiting"
+                ]
+              },
+              "param": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "string"
+              },
+              "evidence_keys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "What you actually have. Positives: differential_pair, oob_interaction, deterministic_repro_x2, server_side_effect, evidence_pairs_attached, mechanism_understood. Penalties: single_observation_only, client_side_only, environment_dependent, mechanism_unclear, blocked_final_proof."
+              },
+              "evidence_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "agent/proxy ids backing the claim."
+              },
+              "notes": {
+                "type": "string"
+              }
+            },
+            "description": "Required — the candidate."
+          },
+          "spawn_validation_tasks": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enqueue one kill-test task when triage=needs_more_validation."
+          },
+          "dedup_only": {
+            "type": "boolean",
+            "default": false,
+            "description": "Only run the local duplicate verdict (the folded check_duplicates); no finding is written."
+          }
+        },
+        "required": [
+          "finding"
+        ]
+      },
+      "example": {
+        "name": "validate_finding",
+        "arguments": {
+          "finding": {
+            "title": "IDOR: cross-account order read via orderId",
+            "url": "https://api.example.com/v2/orders/1042",
+            "vuln_class": "access_control",
+            "param": "orderId",
+            "severity": "high",
+            "evidence_keys": [
+              "differential_pair",
+              "deterministic_repro_x2",
+              "server_side_effect",
+              "evidence_pairs_attached",
+              "mechanism_understood"
+            ],
+            "evidence_refs": [
+              "a-17",
+              "a-21"
+            ]
+          }
+        }
+      },
+      "returns": "score + breakdown + triage + outstanding kill tests + dup_check + scanner crosscheck + verdict.",
+      "group": "mission_control"
+    },
+    {
+      "name": "rag_query_reports",
+      "description": "Search the corpus of 15,000+ publicly disclosed HackerOne bug bounty reports (reddelexc/hackerone-reports) by free-text query with optional filters. Use it to ground any hypothesis in precedent: what the pattern looked like in the wild, which programs paid for it, and how impactful it was (upvotes/bounty). Ranking boosts reports with strong community/monetary signal; agent slang (idor, ssrf, rce, sqli, takeover, race condition, cache poisoning, ssti...) is automatically expanded to the corpus' CWE-style vocabulary. Returns title, program, vuln type, upvotes, bounty and the hackerone.com link of each match.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Required. Free-text query, e.g. 'IDOR order id cross-account' or 'blind SSRF via webhook'."
+          },
+          "vuln_type": {
+            "type": "string",
+            "description": "Filter by vuln type substring, e.g. 'Access Control', 'SSRF', 'XSS - Stored'."
+          },
+          "program": {
+            "type": "string",
+            "description": "Filter by program name substring, e.g. 'Shopify', 'DoD'."
+          },
+          "min_upvotes": {
+            "type": "integer",
+            "default": 0,
+            "description": "Only reports with at least this many upvotes (community validation)."
+          },
+          "min_bounty": {
+            "type": "number",
+            "description": "Only reports paid at least this much (impact validation)."
+          },
+          "limit": {
+            "type": "integer",
+            "default": 8,
+            "maximum": 25
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "example": {
+        "name": "rag_query_reports",
+        "arguments": {
+          "query": "idor order id parameter",
+          "min_upvotes": 5,
+          "limit": 8
+        }
+      },
+      "returns": "results: [{program, title, link, upvotes, bounty, vuln_type, score}] ranked by BM25 x signal boost.",
+      "group": "rag"
+    },
+    {
+      "name": "rag_find_similar",
+      "description": "Given a description of YOUR target (tech stack, framework, surface, feature), find the most analogous disclosed HackerOne reports. Tech keywords (wordpress, graphql, react, oauth, s3, kubernetes, laravel...) are extracted from the description and weighted double, so matches are grounded in the same kind of technology rather than the same words. Use at recon time to learn which bug classes historically work against this stack, and during testing to see how similar bugs were found and demonstrated in the wild.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target_description": {
+            "type": "string",
+            "description": "Required. Description of the target stack/surface, e.g. 'Laravel API with GraphQL endpoint, S3 file uploads, OAuth via Auth0, React admin panel'."
+          },
+          "vuln_type": {
+            "type": "string",
+            "description": "Optional focus filter, e.g. 'SSRF'."
+          },
+          "limit": {
+            "type": "integer",
+            "default": 8,
+            "maximum": 25
+          }
+        },
+        "required": [
+          "target_description"
+        ]
+      },
+      "example": {
+        "name": "rag_find_similar",
+        "arguments": {
+          "target_description": "Laravel API, GraphQL endpoint, S3 uploads, OAuth login, React admin"
+        }
+      },
+      "returns": "results: [{program, title, link, upvotes, bounty, vuln_type, score}] analogous disclosed reports.",
+      "group": "rag"
+    },
+    {
+      "name": "rag_pattern_stats",
+      "description": "Aggregate statistics over the disclosed-report corpus: vulnerability-type heat map with count, median upvotes, paid share, average and max bounty, and a top example per type. Optionally narrowed by tech keywords (matched in report titles) or program. This is the prioritization input: it tells you which bug classes are most proven for the kind of application you are testing — feed it into test-plan ranking instead of guessing. Cheap, local, no target traffic (Tier 0).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "keywords": {
+            "type": "string",
+            "description": "Optional keyword filter over report titles, e.g. 'graphql upload' or 'oauth token'."
+          },
+          "program": {
+            "type": "string",
+            "description": "Optional program substring filter."
+          },
+          "top_n": {
+            "type": "integer",
+            "default": 15,
+            "maximum": 40
+          }
+        }
+      },
+      "example": {
+        "name": "rag_pattern_stats",
+        "arguments": {
+          "keywords": "graphql"
+        }
+      },
+      "returns": "total_matching + vuln_types: [{vuln_type, count, median_upvotes, paid_share, avg_bounty_paid, max_bounty, example}] sorted by proven-impact score.",
+      "group": "rag"
+    },
+    {
+      "name": "rag_playbook",
+      "description": "Build a playbook seed for a concrete hypothesis: retrieves the closest field-proven disclosed reports (min 2 upvotes), extracts the dominant vuln types and the technique keywords that recur across their titles (parameter names, paths, bypass tricks). Use it right before executing any P1-P12 playbook to sharpen insertion points and variant lists, and again at validation to calibrate severity against precedent. The skill (§5.3 step 0, §6 gate 6) defines how to synthesize the returned grounding into checklist steps and citations.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "hypothesis": {
+            "type": "string",
+            "description": "Required. E.g. 'IDOR on /v2/orders via orderId path parameter'."
+          },
+          "endpoint_context": {
+            "type": "string",
+            "description": "Optional endpoint/tech context to sharpen matching, e.g. 'REST JSON API, Laravel'."
+          },
+          "limit": {
+            "type": "integer",
+            "default": 6,
+            "maximum": 15
+          }
+        },
+        "required": [
+          "hypothesis"
+        ]
+      },
+      "example": {
+        "name": "rag_playbook",
+        "arguments": {
+          "hypothesis": "SSRF via webhook url parameter",
+          "endpoint_context": "REST API, S3"
+        }
+      },
+      "returns": "hypothesis + matched_reports [{program, title, link, upvotes, bounty, vuln_type}] + dominant_vuln_types + technique_keywords.",
+      "group": "rag"
+    },
+    {
+      "name": "atap_policy_check",
+      "description": "Determine whether autonomous test-account provisioning is permitted for the target. Parses the policy text collected at bootstrap (skill §2) and returns a verdict — explicit-allow / explicit-deny / unknown — plus the required boundaries (max 3 accounts, no CAPTCHA/anti-bot/SMS circumvention, dedicated test mailbox, disclosure + cleanup) and mail-strategy defaults. MANDATORY before atap_create_account (checkpoint A-0). Tier 0 — no target traffic.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "policy_text": {
+            "type": "string",
+            "description": "The program-policy excerpt about accounts, collected at bootstrap."
+          },
+          "program_url": {
+            "type": "string",
+            "description": "Program/policy URL for the audit trail."
+          },
+          "accounts_needed": {
+            "type": "integer",
+            "default": 3,
+            "description": "How many accounts differential testing requires (2-3)."
+          }
+        }
+      },
+      "example": {
+        "name": "atap_policy_check",
+        "arguments": {
+          "policy_text": "Researchers may create multiple test accounts for verification purposes",
+          "accounts_needed": 2
+        }
+      },
+      "returns": "verdict + meaning + boundaries + strategy defaults.",
+      "group": "atap"
+    },
+    {
+      "name": "atap_create_account",
+      "description": "Create a test account on an in-scope target: generates credentials (username, strong random password, strategy-appropriate email), submits the signup form THROUGH THE BURP BRIDGE (scoped, rate-limited, annotated 'ATAP signup ACC-nn'), stores credentials in the encrypted vault, and detects bot-walls. If the flow is gated by CAPTCHA/anti-bot or needs SMS, the account is marked human_assisted — NO circumvention is attempted. Requires an authorization_reference citing where permission comes from (e.g. scope.md #accounts). Cap: 3 accounts per target (ATAP_MAX_ACCOUNTS).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "In-scope base URL, e.g. https://app.example.com"
+          },
+          "authorization_reference": {
+            "type": "string",
+            "description": "Required. Where permission comes from, e.g. 'scope.md #accounts — program policy explicitly allows multiple test accounts'."
+          },
+          "role_tag": {
+            "type": "string",
+            "default": "A",
+            "description": "Role label for differential testing (A/B/admin-candidate...)."
+          },
+          "signup_endpoint": {
+            "type": "string",
+            "description": "Full signup URL; default {target}/signup."
+          },
+          "email_strategy": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "imap",
+              "catcher",
+              "manual"
+            ],
+            "default": "auto",
+            "description": "auto: IMAP if configured, catcher if enabled, else manual."
+          },
+          "email": {
+            "type": "string",
+            "description": "Explicit test email (manual strategy or override)."
+          },
+          "username": {
+            "type": "string",
+            "description": "Override generated username (atap_a_acc01 style by default)."
+          },
+          "fields": {
+            "type": "object",
+            "description": "Extra signup form fields (e.g. terms checkbox, invite code)."
+          },
+          "content_type": {
+            "type": "string",
+            "enum": [
+              "form",
+              "json"
+            ],
+            "default": "form"
+          }
+        },
+        "required": [
+          "target",
+          "authorization_reference"
+        ]
+      },
+      "example": {
+        "name": "atap_create_account",
+        "arguments": {
+          "target": "https://app.example.com",
+          "authorization_reference": "scope.md #accounts: policy allows multiple test accounts",
+          "role_tag": "A"
+        }
+      },
+      "returns": "account record (redacted), signup HTTP status, blocked_reason if bot-walled, next step.",
+      "group": "atap"
+    },
+    {
+      "name": "atap_verify_account",
+      "description": "Complete email verification for a provisioned account: waits for the confirmation mail (catcher or IMAP strategy), extracts the verification link, clicks it through the Burp bridge, and confirms success. For the manual strategy (or any fallback), pass verification_link collected by the operator. Never bypasses mail-flow checks.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "e.g. ACC-01"
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "default": 90,
+            "maximum": 600,
+            "description": "How long to wait for the mail."
+          },
+          "verification_link": {
+            "type": "string",
+            "description": "Manual fallback: the URL from the verification email."
+          }
+        },
+        "required": [
+          "account_id"
+        ]
+      },
+      "example": {
+        "name": "atap_verify_account",
+        "arguments": {
+          "account_id": "ACC-01"
+        }
+      },
+      "returns": "account status (verified), link source (mail id / manual), verify HTTP status, next step.",
+      "group": "atap"
+    },
+    {
+      "name": "atap_login",
+      "description": "Authenticate a provisioned account through the Burp bridge and capture the session (Set-Cookie pairs and/or bearer/JWT token from the response) into the encrypted vault; marks the account active. Bot-walled logins are refused WITHOUT circumvention (human_assisted). Max one retry — avoid lockout games.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "login_endpoint": {
+            "type": "string",
+            "description": "Default {target}/login or stored endpoint."
+          },
+          "field_map": {
+            "type": "object",
+            "description": "Field-name overrides, e.g. {\"username_field\":\"email\"} plus extra fields from your own test device only."
+          },
+          "content_type": {
+            "type": "string",
+            "enum": [
+              "form",
+              "json"
+            ],
+            "default": "form"
+          }
+        },
+        "required": [
+          "account_id"
+        ]
+      },
+      "example": {
+        "name": "atap_login",
+        "arguments": {
+          "account_id": "ACC-01"
+        }
+      },
+      "returns": "redacted account, cookies_captured count, masked token, next step.",
+      "group": "atap"
+    },
+    {
+      "name": "atap_get_session",
+      "description": "Return ready-to-use session material for an account (Cookie header string, Authorization bearer) so hunting tools (send_http_request / modify_and_resend_request / run_simple_fuzz) can act as that role — this is how P1 differential testing switches between userA and userB. Passwords are NOT included unless include_password=true. Sessions stay in the vault.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "include_password": {
+            "type": "boolean",
+            "default": false,
+            "description": "Reveal the generated password (e.g. to hand the account to the human)."
+          }
+        },
+        "required": [
+          "account_id"
+        ]
+      },
+      "example": {
+        "name": "atap_get_session",
+        "arguments": {
+          "account_id": "ACC-01"
+        }
+      },
+      "returns": "cookie_header, authorization, identity (username/email/role_tag), usage note.",
+      "group": "atap"
+    },
+    {
+      "name": "atap_account_health",
+      "description": "Maintenance: validate an account's session still works (authenticated GET through the bridge); on 401/403 optionally re-login once and re-check. Checkpoint A-2 — run before each authenticated hunting batch so differential tests never fail silently on an expired session. Marks the account expired when re-auth fails.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "check_endpoint": {
+            "type": "string",
+            "description": "Cheap authenticated endpoint; default {target}/."
+          },
+          "auto_relogin": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "example": {
+        "name": "atap_account_health",
+        "arguments": {
+          "account_id": "ACC-02"
+        }
+      },
+      "returns": "healthy, status_code, action taken (relogin / marked_expired / none).",
+      "group": "atap"
+    },
+    {
+      "name": "atap_list_accounts",
+      "description": "List every provisioned test account with lifecycle status (planned → created → awaiting_verification → verified → active → expired → locked → human_assisted → cleaned_up/deleted), counts by status, and optionally the audit tail. Redacted — no passwords/sessions in output.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "include_audit": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "example": {
+        "name": "atap_list_accounts",
+        "arguments": {}
+      },
+      "returns": "accounts[] + counts_by_status (+ audit_tail).",
+      "group": "atap"
+    },
+    {
+      "name": "atap_cleanup",
+      "description": "End-of-engagement lifecycle management (checkpoint A-3): attempt authenticated self-service deletion/deactivation for each account through the bridge, mark accounts that need manual cleanup, and return a report-ready disclosure_block (every account created, its identity and final status — paste into report.md §Scope & methodology). dry_run=true previews without state changes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subset; default all non-cleaned accounts."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "example": {
+        "name": "atap_cleanup",
+        "arguments": {
+          "dry_run": true
+        }
+      },
+      "returns": "cleanup_results[], disclosure_block, outstanding ids, note.",
+      "group": "atap"
+    },
+    {
+      "name": "waf_fingerprint",
+      "description": "Classify the WAF/CDN in front of a target from one benign response: vendor (Cloudflare, Akamai, Imperva, F5, AWS WAF, ModSecurity, Sucuri, Fastly, ...) with confidence + evidence, and a verdict — normal / blocked / challenge / rate_limited. Checkpoint W-1 (recon). Either pass url (one annotated GET via the bridge) or an inline response you already have (Tier 0, no traffic).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Benign target URL to fetch via the bridge."
+          },
+          "response": {
+            "type": "object",
+            "description": "Inline response {status, headers:[{name,value}], body} to classify without any request."
+          }
+        }
+      },
+      "example": {
+        "name": "waf_fingerprint",
+        "arguments": {
+          "url": "https://app.example.com/"
+        }
+      },
+      "returns": "classification {vendors[], verdict, challenge?, status} + guidance.",
+      "group": "waf"
+    },
+    {
+      "name": "waf_probe",
+      "description": "Run the capped inert probe battery (single GETs, dummy param, non-executing payload strings — .invalid TLD for the log4j probe) to map which payload classes the WAF blocks vs passes. Checkpoint W-2, before payload-bearing testing on a host. Hard budget: WAF_PROBE_MAX requests per host per engagement (default 16, incl. baseline). A fully-open WAF is itself a finding angle; a fully-blocking one redirects effort to the classes it passes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "In-scope base URL."
+          },
+          "path": {
+            "type": "string",
+            "default": "/",
+            "description": "Benign path for probes."
+          },
+          "param": {
+            "type": "string",
+            "default": "x",
+            "description": "Dummy query parameter name."
+          },
+          "max_probes": {
+            "type": "integer",
+            "default": 12,
+            "maximum": 12
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "example": {
+        "name": "waf_probe",
+        "arguments": {
+          "target": "https://app.example.com"
+        }
+      },
+      "returns": "baseline verdict + per-probe blocked/passed map + budget used/cap.",
+      "group": "waf"
+    },
+    {
+      "name": "waf_adapt",
+      "description": "Given a blocked request, produce a RANKED list of WAF-normalization transformations (UA normalization, IP-header tricks, X-Original-URL/X-Rewrite-URL, parameter pollution, double-encoding, SQL comment splitting, path segment tricks, content-type re-encoding) with rationale + risk per transform. Pure computation, Tier 0. Checkpoint W-3 step 1.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "description": "The blocked request {method,url,headers:[{name,value}],body}."
+          },
+          "block_response": {
+            "type": "object",
+            "description": "Optional block page response for context."
+          }
+        },
+        "required": [
+          "request"
+        ]
+      },
+      "example": {
+        "name": "waf_adapt",
+        "arguments": {
+          "request": {
+            "method": "GET",
+            "url": "https://app.example.com/search?x=1 UNION SELECT user",
+            "headers": []
+          }
+        }
+      },
+      "returns": "transforms[] (id/class/risk/rationale) + next-step guidance.",
+      "group": "waf"
+    },
+    {
+      "name": "waf_test_bypass",
+      "description": "Apply selected transformations to a blocked request and send each variant through the bridge (annotated 'WAF bypass test [id]'), comparing against the block-page signature to determine whether the origin was reached. Tier 1, budgeted: ≤ 8 per call, WAF_BYPASS_MAX attempts per host per engagement (default 24). An origin-reachable result is a FINDING CANDIDATE — re-validate (§6) and calibrate with V-1; impact is the underlying vuln's reachability, never 'WAF bypassed' alone. No IP rotation, no TLS fingerprinting, no rate-limit evasion — ever.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "description": "The blocked request {method,url,headers,body}."
+          },
+          "transform_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ids from waf_adapt (start with low-risk)."
+          },
+          "max_attempts": {
+            "type": "integer",
+            "default": 8,
+            "maximum": 8
+          }
+        },
+        "required": [
+          "request",
+          "transform_ids"
+        ]
+      },
+      "example": {
+        "name": "waf_test_bypass",
+        "arguments": {
+          "request": {
+            "method": "GET",
+            "url": "https://app.example.com/search?x=1 UNION SELECT user",
+            "headers": []
+          },
+          "transform_ids": [
+            "ua-normalize",
+            "payload-comment"
+          ]
+        }
+      },
+      "returns": "baseline + per-transform {status, verdict, origin_reached} + budget + finding_hint.",
+      "group": "waf"
+    },
+    {
+      "name": "captcha_detect",
+      "description": "Detect and classify a CAPTCHA/challenge from a page: reCAPTCHA v2/v3, hCaptcha, Turnstile, GeeTest or custom — with the sitekey extracted and the sanctioned handling path per type. Checkpoint C-0, runs whenever a challenge page is encountered. Either pass url (one annotated GET via the bridge) or an inline response (Tier 0).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Challenge page URL to fetch via the bridge."
+          },
+          "response": {
+            "type": "object",
+            "description": "Inline response {status, headers, body} to classify without any request."
+          }
+        }
+      },
+      "example": {
+        "name": "captcha_detect",
+        "arguments": {
+          "url": "https://app.example.com/protected-signup"
+        }
+      },
+      "returns": "challenge {type, vendor, sitekey, pageurl} + handling guidance.",
+      "group": "captcha"
+    },
+    {
+      "name": "captcha_solve",
+      "description": "Get a CAPTCHA token via a sanctioned strategy. DEFAULT strategy=human: returns instructions for the operator (no circumvention). strategy=service — automated solving through the configured solver service — is gated three ways: the operator must have set CAPTCHA_SERVICE_KEY, the call must carry an authorization_reference citing the engagement's explicit permission, and the per-engagement cap (CAPTCHA_MAX_SOLVES, default 5) must have room. Tokens are single-use, one flow each; every solve is counted and flagged for report disclosure. Supported: recaptcha_v2, recaptcha_v3, hcaptcha.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "challenge": {
+            "type": "object",
+            "description": "{type, sitekey, pageurl, action?, min_score?} from captcha_detect."
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "human",
+              "service"
+            ],
+            "default": "human"
+          },
+          "authorization_reference": {
+            "type": "string",
+            "description": "Required for service strategy: where the engagement explicitly allows automated solving."
+          },
+          "timeout": {
+            "type": "integer",
+            "default": 120,
+            "maximum": 240,
+            "description": "Service poll timeout (seconds)."
+          }
+        },
+        "required": [
+          "challenge"
+        ]
+      },
+      "example": {
+        "name": "captcha_solve",
+        "arguments": {
+          "challenge": {
+            "type": "recaptcha_v2",
+            "sitekey": "6Le...",
+            "pageurl": "https://app.example.com/protected-signup"
+          },
+          "strategy": "service",
+          "authorization_reference": "scope.md #captcha: operator explicitly authorizes capped automated solving"
+        }
+      },
+      "returns": "token (service) or instructions (human) + budget + disclosure line.",
+      "group": "captcha"
+    },
+    {
+      "name": "captcha_test_bypass",
+      "description": "Test whether the TARGET actually validates CAPTCHA tokens server-side — not a solver. Submits the form with the captcha field omitted / empty / a dummy value / a replayed token, each through the bridge (annotated). A server accepting any invalid variant is a FINDING CANDIDATE ('CAPTCHA not server-side-validated'); always allowed, ≤ 6 requests. This is the check that matters far more than solving: an unvalidated CAPTCHA is the real vulnerability.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Form action URL (in-scope)."
+          },
+          "form_fields": {
+            "type": "object",
+            "description": "The form's non-captcha fields, e.g. {\"username\":\"atap_user\"}."
+          },
+          "captcha_field": {
+            "type": "string",
+            "default": "g-recaptcha-response"
+          },
+          "token_to_replay": {
+            "type": "string",
+            "description": "A previously seen valid token (tests replay acceptance)."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "POST"
+            ],
+            "default": "POST"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "example": {
+        "name": "captcha_test_bypass",
+        "arguments": {
+          "url": "https://app.example.com/signup",
+          "form_fields": {
+            "username": "atap_probe"
+          }
+        }
+      },
+      "returns": "per-variant accepted/rejected + validation_bypassed + finding_hint.",
+      "group": "captcha"
+    }
+  ]
+}
