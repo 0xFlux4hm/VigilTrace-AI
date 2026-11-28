@@ -31,13 +31,16 @@ _bridge_client: BridgeClient | None = None
 
 
 def manifest() -> dict:
-    """Load and validate the 48-tool manifest (cached)."""
+    """Load and validate the tool manifest (cached). meta.surface must equal
+    the number of unique tool names — the single source of truth holds."""
     global _manifest
     if _manifest is None:
         doc = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
         names = [t["name"] for t in doc["tools"]]
-        if doc["meta"].get("surface") != 48 or len(set(names)) != 48:
-            raise SystemExit(f"manifest at {MANIFEST_PATH} does not carry the 48-tool surface")
+        surface = doc["meta"].get("surface")
+        if not surface or doc["meta"].get("surface") != len(set(names)):
+            raise SystemExit(f"manifest at {MANIFEST_PATH}: meta.surface={surface} "
+                             f"!= {len(set(names))} tool names")
         _manifest = doc
     return _manifest
 
@@ -62,18 +65,22 @@ def local_handlers() -> dict[str, Callable[[dict], dict]]:
     global _local
     if _local is None:
         from aobh.orchestrator import tools as orchestrator_tools
+        from aobh.orchestrator.oob_tools import register_oob_handlers
         from aobh.rag import tools as rag_tools
         from aobh.atap import tools as atap_tools
         from aobh.waf import tools as waf_tools
         from aobh.recaptcha import tools as captcha_tools
+        from aobh.tamper import tools as tamper_tools
 
         cfg = get_config()
         handlers: dict[str, Callable[[dict], dict]] = {}
         handlers.update(orchestrator_tools.register(str(cfg.engagement_dir)))
+        handlers.update(register_oob_handlers(str(cfg.engagement_dir)))
         handlers.update(rag_tools.register(None))
         handlers.update(atap_tools.register(None))
         handlers.update(waf_tools.register(None))
         handlers.update(captcha_tools.register(None))
+        handlers.update(tamper_tools.register(str(cfg.engagement_dir)))
         _local = handlers
     return _local
 

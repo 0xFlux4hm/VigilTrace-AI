@@ -1,0 +1,49 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "zai/glm-4.6",
+  "default_agent": "orchestrator",
+  "instructions": ["AGENTS.md"],
+  "providers": {
+    "zai": {
+      "name": "Z.ai GLM",
+      "env": ["ZAI_API_KEY"],
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "https://api.z.ai/api/paas/v4",
+        "apiKey": "{env:ZAI_API_KEY}"
+      },
+      "models": {
+        "glm-4.6": {
+          "name": "GLM-4.6",
+          "limit": { "context": 200000, "output": 32000 }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "aobh": {
+        "type": "local",
+        "command": ["python3", "-m", "aobh.tools.server"],
+        "cwd": ".",
+        "enabled": true,
+        "environment": {
+          "ATAP_ENGAGEMENT_DIR": ".engagement",
+          "PYTHONUNBUFFERED": "1"
+        }
+      }
+    }
+  },
+  "permissions": [
+    { "action": "shell", "resource": "*", "effect": "allow" },
+    { "action": "edit", "resource": "**", "effect": "allow" },
+    { "action": "read", "resource": "**", "effect": "allow" },
+    { "action": "webfetch", "resource": "*", "effect": "allow" },
+    { "action": "websearch", "resource": "*", "effect": "allow" },
+    { "action": "subagent", "resource": "*", "effect": "allow" },
+    { "action": "shell", "resource": "rm -rf *", "effect": "deny" },
+    { "action": "shell", "resource": "sudo *", "effect": "deny" },
+    { "action": "shell", "resource": "shutdown*", "effect": "deny" },
+    { "action": "shell", "resource": "dd if=* of=/dev/*", "effect": "deny" }
+  ]
+}

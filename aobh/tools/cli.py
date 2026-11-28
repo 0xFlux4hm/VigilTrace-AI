@@ -87,7 +87,7 @@ def run_smoke() -> int:
 
     registry.reset()
     doc = registry.manifest()
-    check("manifest surface == 48 tools", doc["meta"]["surface"] == 48 and len(doc["tools"]) == 48)
+    check("manifest surface == 56 tools", doc["meta"]["surface"] == 56 and len(doc["tools"]) == 56)
 
     handlers = registry.local_handlers()
     local_names = [t["name"] for t in doc["tools"] if t["group"] != "burp_bridge"]

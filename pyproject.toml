@@ -26,3 +26,7 @@ include = ["aobh*"]
 [tool.setuptools.package-data]
 "aobh.tools" = ["tools.json"]
 "aobh.rag" = ["data/*", "index/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

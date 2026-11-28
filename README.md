@@ -2,24 +2,27 @@
 
 **AUTHORIZED SECURITY TESTING ONLY** — wire this up only for targets covered by a bug bounty program scope or a signed pentest contract.
 
-An MCP server exposes **48 tools** in six groups over stdio. Four local Python engines do the orchestration and analysis; a Burp Suite Montoya extension carries every target-facing request so scope, rate limits, counters and audit notes are enforced in Burp itself — and a Python-side authorization gate (`aobh.core.authz`) refuses anything the engagement doesn't cover before it even reaches the bridge.
+An MCP server exposes **56 tools** in eight groups over stdio. Five local Python engines do the orchestration and analysis; a Burp Suite Montoya extension carries every target-facing request so scope, rate limits, counters and audit notes are enforced in Burp itself — and a Python-side authorization gate (`aobh.core.authz`) refuses anything the engagement doesn't cover before it even reaches the bridge.
 
 ```
-agent (docs/01-system-prompt.md) ──stdio MCP── aobh.tools.server (48 tools)
+agent (.opencode/agents/orchestrator.md) ──stdio MCP── aobh.tools.server (56 tools)
                         │
      burp_bridge 15 → Burp "AI Agent Bridge" extension (extension/, Java 17)
-     mission_control 14 → orchestrator (DAG, coverage, budget, approvals, validator)
+     mission_control 16 → orchestrator (DAG, coverage, budget, approvals, validator)
+                          + Layer 11 gates (sequence_next, closure_check)
      rag 4 → disclosed-report corpus (15,219 HackerOne reports)
-     atap 8 → account vault + registrar/verifier + session leases
+     atap 8 → account vault + registrar/verifier + session leases (canary accounts)
      waf 4 → fingerprint / probe battery / transforms / bypass tester
      captcha 3 → detection + sanctioned solver strategies
+     tamper 4 → Layer 12: tamper matrix / one-variable runs / res_diff / param discovery
+     oob 2 → out-of-band registration + polling with TTL + closure-gate bookkeeping
 ```
 
 ## Repo map
 
 | Path | What it is |
 |---|---|
-| `aobh/tools/tools.json` | The 48-tool manifest — single source of truth (names, groups, schemas, folding map) |
+| `aobh/tools/tools.json` | The 56-tool manifest — single source of truth (names, groups, schemas, folding map) |
 | `aobh/tools/server.py` | FastMCP stdio server; every call funnels through `registry.dispatch` |
 | `aobh/tools/cli.py` | `aobh serve|list-tools|ingest|smoke|doctor` |
 | `aobh/core/` | config (env-first), bridge client, **authorization gate**, shared utils |
@@ -28,8 +31,11 @@ agent (docs/01-system-prompt.md) ──stdio MCP── aobh.tools.server (48 too
 | `aobh/atap/` | encrypted vault (scrypt+HMAC-CTR), registrar/verifier, session leases, mailcatch |
 | `aobh/waf/`, `aobh/recaptcha/` | WAF fingerprint/probe/transform/bypass; CAPTCHA detection + sanctioned strategies only |
 | `extension/` | the Burp extension (build.py = verified path; pom.xml for Maven users) |
-| `docs/` | 01 system prompt · 02 tool index (generated) · 03 implementation notes · 04 architecture · bridge protocol |
-| `examples/` | sample mission brief + scope authorization file |
+| `.opencode/` + `opencode.json` + `AGENTS.md` | the OpenCode runtime: orchestrator + 3 subagents, 16 operator commands, V2 config, session rules |
+| `packs/` | Layer 9 + Layer 12 payload ladders (`_ladders.json`, `_waf_matrix.json`, `access_control.json`), OSINT dorks, wordlists |
+| `skills/` | doctrine documents tracked by the skill ledger (`param_tampering.md` = Layer 12 law) |
+| `docs/` | 01 system prompt · 02 tool index (generated) · 03 implementation notes · 04 architecture · bridge protocol · **IMPLEMENTATION.md** (runtime, sequences, OOB infra, Layer 12 pipeline) |
+| `examples/` | sample mission brief + **full Layer 6–12 mission template** + scope authorization file |
 | `scripts/` | gen_docs, ingest, smoke |
 | `tests/` | pytest suite (33 tests; the ported harnesses carry 163 in-suite checks) |
 
@@ -47,10 +53,18 @@ make smoke                        # offline end-to-end smoke (no Burp needed)
 3. **Run the server**:
    ```bash
    aobh serve                       # stdio MCP; register as "aobh" in your MCP client
-   aobh list-tools                  # the 48-tool surface
+   aobh list-tools                  # the 56-tool surface
    aobh doctor                      # config (redacted) + bridge health
    ```
-4. **Attach the agent prompt** (`docs/01-system-prompt.md`) and start the mission loop: `mission_init(target, authorization_reference)` → `task_next` loop → `validate_finding` → `raise_issue`. Authorize prefixes explicitly: `add_to_scope(url_prefix, added_from="scope.md line N")` against `examples/scope.example.md`.
+4. **Attach the agent and start the mission loop.** Two ways:
+   - **OpenCode (recommended):** `cd` here and run `opencode` — `opencode.json` starts
+     the `aobh` MCP server and the orchestrator agent automatically. Drive with the
+     slash commands: `/mission examples/mission.template.json` → `/status` → `/recon`
+     → `/test` → `/tamper` → `/observe` → `/validate` → `/report`.
+   - **Any MCP client:** attach `docs/01-system-prompt.md`, register `aobh serve`, and
+     run `mission_init(target, authorization_reference)` → `task_next` loop →
+     `validate_finding` → `raise_issue`. Authorize prefixes explicitly:
+     `add_to_scope(url_prefix, added_from="scope.md line N")` against `examples/scope.example.md`.
 
 ## Tests
 

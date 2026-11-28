@@ -17,17 +17,17 @@ from aobh.tools.server import build_mcp
 MANIFEST = json.loads(registry.MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def test_manifest_is_48_tools_in_six_groups():
-    assert MANIFEST["meta"]["surface"] == 48
-    assert len(MANIFEST["tools"]) == 48
+def test_manifest_is_56_tools_in_eight_groups():
+    assert MANIFEST["meta"]["surface"] == 56
+    assert len(MANIFEST["tools"]) == 56
     names = [t["name"] for t in MANIFEST["tools"]]
-    assert len(set(names)) == 48
+    assert len(set(names)) == 56
     groups = {}
     for t in MANIFEST["tools"]:
         groups.setdefault(t["group"], []).append(t["name"])
     assert {k: len(v) for k, v in groups.items()} == {
-        "burp_bridge": 15, "mission_control": 14, "rag": 4,
-        "atap": 8, "waf": 4, "captcha": 3}
+        "burp_bridge": 15, "mission_control": 16, "rag": 4,
+        "atap": 8, "waf": 4, "captcha": 3, "tamper": 4, "oob": 2}
 
 
 def test_registry_covers_every_local_tool_exactly():
@@ -81,10 +81,10 @@ def test_dispatch_bridge_tool_down_gives_clean_envelope(monkeypatch):
     assert out["ok"] is False and out.get("error") and out.get("hint"), out
 
 
-def test_fastmcp_lists_all_48_tools_with_manifest_schemas():
+def test_fastmcp_lists_all_56_tools_with_manifest_schemas():
     mcp = build_mcp()
     tools = asyncio.run(mcp.list_tools())
-    assert len(tools) == 48
+    assert len(tools) == 56
     manifest_tools = {t["name"]: t for t in MANIFEST["tools"]}
     for tool in tools:
         assert tool.name in manifest_tools
@@ -94,10 +94,10 @@ def test_fastmcp_lists_all_48_tools_with_manifest_schemas():
         assert schema is not None
 
 
-def test_cli_list_tools_48_lines(capsys):
+def test_cli_list_tools_56_lines(capsys):
     from aobh.tools.cli import main as cli_main
 
     assert cli_main(["list-tools"]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
-    assert len(lines) == 48
+    assert len(lines) == 56
     assert all("\t" in line for line in lines)

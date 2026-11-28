@@ -81,7 +81,7 @@ def _run_tool(core: MissionCore, name: str, args: dict) -> dict:
 
 
 def register(engagement_dir: str) -> dict[str, Callable]:
-    """Build the 14-tool handler map over `engagement_dir`.
+    """Build the 16-tool mission_control handler map over `engagement_dir`.
 
     Each handler takes ONE positional dict of arguments and returns the
     response envelope — the MCP registry calls it exactly that way.
@@ -98,4 +98,8 @@ def register(engagement_dir: str) -> dict[str, Callable]:
 
     for name in _HANDLERS:
         tools[name] = _make(name)
+
+    # Layer 11 gates live in the mission_control group (same store, same register)
+    from aobh.orchestrator.sequences import register_sequence_handlers
+    tools.update(register_sequence_handlers(engagement_dir))
     return tools

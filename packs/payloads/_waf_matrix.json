@@ -1,0 +1,47 @@
+{
+  "_waf_matrix": {
+    "note": "fingerprint -> boosted stages for waf_adapt. Boost = try these stages first after canonical.",
+    "fingerprints": {
+      "cloudflare": {
+        "boost": [
+          "case_alternation",
+          "inline_comments",
+          "encoding_chains"
+        ]
+      },
+      "aws_waf": {
+        "boost": [
+          "hpp",
+          "case_alternation",
+          "context_wrappers"
+        ]
+      },
+      "akamai": {
+        "boost": [
+          "encoding_chains",
+          "header_smuggle",
+          "case_alternation"
+        ]
+      },
+      "imperva": {
+        "boost": [
+          "inline_comments",
+          "encoding_chains",
+          "hpp"
+        ]
+      },
+      "modsec_crs": {
+        "boost": [
+          "case_alternation",
+          "inline_comments"
+        ]
+      },
+      "generic": {
+        "boost": [
+          "case_alternation",
+          "encoding_chains"
+        ]
+      }
+    }
+  }
+}

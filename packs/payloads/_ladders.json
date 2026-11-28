@@ -1,0 +1,43 @@
+{
+  "_ladders": {
+    "note": "Global S3 stage order (skills/payload_ladders.md). Packs carry stage tags implicitly via note; waf_adapt reorders by _waf_matrix.json boosts.",
+    "stages": [
+      {
+        "stage": "canonical",
+        "note": "untouched classic payload \u2014 baseline for every ladder"
+      },
+      {
+        "stage": "case_alternation",
+        "note": "uNION/sElEct style keyword case mixes"
+      },
+      {
+        "stage": "inline_comments",
+        "note": "/**/ and /*!50000*/ style splits"
+      },
+      {
+        "stage": "encoding_chains",
+        "note": "double-URL-encode, %0a, unicode escapes, json \\u"
+      },
+      {
+        "stage": "context_wrappers",
+        "note": "json body / form / xml / graphql wrappers per endpoint context"
+      },
+      {
+        "stage": "hpp",
+        "note": "param pollution: id=1&id={PEER_ID} both parser orders"
+      },
+      {
+        "stage": "header_smuggle",
+        "note": "X-HTTP-Method-Override, X-Original-URL, X-Rewrite-URL, X-Forwarded-For"
+      },
+      {
+        "stage": "polyglot",
+        "note": "multi-context payloads only when earlier stages exhausted"
+      }
+    ],
+    "budget": {
+      "max_attempts_per_param": 40,
+      "repeat_once": true
+    }
+  }
+}

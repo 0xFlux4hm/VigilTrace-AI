@@ -1,0 +1,80 @@
+{
+  "_comment": "Full mission template — every policy block from Layers 6-12. Fill CHANGEME values from the program brief before mission_init; anything left as CHANGEME stays a visible placeholder, never invented.",
+  "mission_init": {
+    "target": "https://CHANGEME-main-app.example.com",
+    "authorization_reference": "CHANGEME-program / contract reference",
+    "program_url": "https://CHANGEME-program-security-page"
+  },
+  "budgets": {
+    "requests": 6000,
+    "fuzz": 500,
+    "tool_calls": 900,
+    "session_minutes": 240
+  },
+  "accounts": {
+    "per_target_max": 3,
+    "canary_accounts_required_for_idor": true,
+    "provisioning": "atap_create_account only with operator-provided credentials; disclosed + cleaned up at close-out"
+  },
+  "recon_policy": {
+    "proxy_history_first": true,
+    "wayback_urls_per_asset": 10000,
+    "params_per_asset": 500,
+    "saturation": { "novelty_threshold": 5, "cycles": 2, "action": "promote_testing" }
+  },
+  "tamper_policy": {
+    "baseline_required": true,
+    "one_variable_per_probe": true,
+    "budget_probes_per_asset": 60,
+    "repeat_once": true,
+    "normalize_volatile_fields": ["timestamp", "nonce", "csrf", "request_id", "tracking", "session", "trace_id"],
+    "signal_map": {
+      "data_cross": "confirmed_candidate",
+      "state_change": "confirmed_candidate",
+      "behavior_change": "suspected",
+      "rejected": "guardrail_mapped",
+      "noise": "ignore"
+    }
+  },
+  "oob_policy": {
+    "backend": "burp_collaborator (extension bridge); self-hosted interactsh as optional replacement — see docs/IMPLEMENTATION.md §3",
+    "register_before_first_payload": true,
+    "poll_before_claim": true,
+    "final_poll_before_closure": true,
+    "default_ttl_minutes": 60,
+    "cred_metadata_policy": "detect_not_exfiltrate"
+  },
+  "execution_policy": {
+    "sequences": {
+      "s0_mission": "bootstrap -> recon -> triage -> testing -> validation -> report (sequence_next gate)",
+      "s1_asset": "surface map -> class enumeration -> ladders -> OOB -> auth matrix -> verdicts -> closure -> ledger",
+      "s2_class": "baseline -> reflection -> error -> boolean -> time -> OOB -> bypass -> minimal PoC",
+      "s3_payload": "canonical -> case -> comments -> encoding -> wrappers -> HPP -> header smuggle -> polyglot (_ladders.json)",
+      "tamper_loop": "baseline_tamper_observe_attribute (skills/param_tampering.md)"
+    },
+    "verdicts_allowed": ["confirmed", "suspected", "no_findings_complete", "incomplete"],
+    "closure_gate": {
+      "required_tool_coverage": 1.0,
+      "min_auth_contexts": 2,
+      "oob_required_if_applicable": true,
+      "validator_signoff": true,
+      "required_skills_when_applicable": ["param_tampering"]
+    },
+    "skim_detection": {
+      "min_tool_calls_per_coverage_cell": 0.4,
+      "min_probes_per_param": 6,
+      "auto_reopen": true
+    },
+    "obedience": {
+      "user_directives": "pinned_tasks_completed_or_blocked",
+      "refusal_handling": "reroute_and_log_refusal_event",
+      "scope_conflict": "report_alternatives_continue_authorized"
+    },
+    "escalation": {
+      "tier3_requires": "approved request_approval record",
+      "notify": "mission_control(action=\"notify\", level=\"critical\")"
+    }
+  },
+  "scope_file": "examples/scope.example.md",
+  "notes": "destructive techniques stay out of every ladder unless the program explicitly authorizes them AND the Tier-3 gate clears; secrets are report-only, everywhere, always."
+}

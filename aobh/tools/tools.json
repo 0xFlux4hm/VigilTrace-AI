@@ -2,7 +2,7 @@
   "meta": {
     "name": "aobh-tools",
     "version": "1.0.0",
-    "protocol": "MCP-style tool definitions (JSON Schema inputSchema per tool). Burp tools proxy to the Burp extension bridge; mission_*/rag_*/atap_*/waf_*/captcha_* tools run local engines agent-side, with all target-facing HTTP flowing through the bridge. The shipped rag/server.py serves all six groups. See IMPLEMENTATION.md.",
+    "protocol": "MCP-style tool definitions (JSON Schema inputSchema per tool). Burp tools proxy to the Burp extension bridge; mission_*/rag_*/atap_*/waf_*/captcha_* tools run local engines agent-side, with all target-facing HTTP flowing through the bridge. The shipped rag/server.py serves all six groups. See IMPLEMENTATION.md. Layer 12 (aobh.tamper) adds parameter tampering with change observation; Layer 11 gates (sequence_next, closure_check) and the OOB ledger (oob_register/oob_poll over Collaborator) ride the mission store. See docs/IMPLEMENTATION.md.",
     "response_envelope": "Every tool returns {\"ok\": true, \"data\": ...} or {\"ok\": false, \"error\": \"...\", \"hint\": \"...\"}. Responses are JSON.",
     "rag": {
       "corpus": "15,219 publicly disclosed HackerOne reports (428 programs, 215 vuln types, 3,241 paid) from github.com/reddelexc/hackerone-reports data.csv",
@@ -97,14 +97,16 @@
         "raise_issue"
       ]
     },
-    "surface": 48,
+    "surface": 56,
     "groups": {
       "burp_bridge": 15,
-      "mission_control": 14,
+      "mission_control": 16,
       "rag": 4,
       "atap": 8,
       "waf": 4,
-      "captcha": 3
+      "captcha": 3,
+      "tamper": 4,
+      "oob": 2
     },
     "folding": {
       "task_list": "mission_status already summarizes the queue; engine.task_list stays public for tests",
@@ -2678,6 +2680,355 @@
       },
       "returns": "per-variant accepted/rejected + validation_bypassed + finding_hint.",
       "group": "captcha"
+    },
+    {
+      "name": "tamper_matrix_build",
+      "group": "tamper",
+      "description": "Layer 12: classify every parameter of a request into tamper classes (identity / authz / value / state / type_confusion / hidden) and return the per-class probe matrix. Use before any tamper run; pairs with extract_parameters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "proxy",
+                  "agent",
+                  "sitemap",
+                  "raw"
+                ],
+                "description": "proxy = Burp Proxy history id; agent = agent-sent id; sitemap = url+method; raw = inline request."
+              },
+              "id": {
+                "description": "proxy: integer history id; agent: string agent id."
+              },
+              "url": {
+                "type": "string",
+                "description": "sitemap: full URL."
+              },
+              "method": {
+                "type": "string",
+                "description": "sitemap: HTTP method (default GET)."
+              },
+              "request": {
+                "type": "string",
+                "description": "raw: full HTTP/1.1 request text."
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "raw_request": {
+            "type": "string",
+            "description": "inline raw HTTP/1.1 request (instead of source)."
+          }
+        }
+      }
+    },
+    {
+      "name": "param_tamper_run",
+      "group": "tamper",
+      "description": "Layer 12 tamper loop: capture a baseline, then walk the ladder for one param ONE VARIABLE PER PROBE (send via bridge, diff each response, classify the signal: data_cross / state_change / behavior_change / rejected / noise), repeat hits and deterministic rejects once, record everything in tamper.json. data_cross and state_change signals are candidates: confirm with canary accounts (atap) before validate_finding.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "proxy",
+                  "agent",
+                  "sitemap",
+                  "raw"
+                ],
+                "description": "proxy = Burp Proxy history id; agent = agent-sent id; sitemap = url+method; raw = inline request."
+              },
+              "id": {
+                "description": "proxy: integer history id; agent: string agent id."
+              },
+              "url": {
+                "type": "string",
+                "description": "sitemap: full URL."
+              },
+              "method": {
+                "type": "string",
+                "description": "sitemap: HTTP method (default GET)."
+              },
+              "request": {
+                "type": "string",
+                "description": "raw: full HTTP/1.1 request text."
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "raw_request": {
+            "type": "string"
+          },
+          "param": {
+            "type": "string",
+            "description": "parameter to tamper (default: first candidate)."
+          },
+          "tamper_class": {
+            "type": "string",
+            "enum": [
+              "identity",
+              "authz",
+              "value",
+              "state",
+              "type_confusion",
+              "hidden"
+            ]
+          },
+          "budget": {
+            "type": "integer",
+            "description": "max probes this run (default 20; engine floor per param = 6)."
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note"
+        ]
+      }
+    },
+    {
+      "name": "res_diff",
+      "group": "tamper",
+      "description": "Normalized field-level diff of two responses (baseline vs tampered or any pair): volatile fields stripped, lists sorted, per-field added/removed/changed deltas, signal classification + attribution. The observation half of Layer 12.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source_a": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "proxy",
+                  "agent",
+                  "sitemap",
+                  "raw"
+                ],
+                "description": "proxy = Burp Proxy history id; agent = agent-sent id; sitemap = url+method; raw = inline request."
+              },
+              "id": {
+                "description": "proxy: integer history id; agent: string agent id."
+              },
+              "url": {
+                "type": "string",
+                "description": "sitemap: full URL."
+              },
+              "method": {
+                "type": "string",
+                "description": "sitemap: HTTP method (default GET)."
+              },
+              "request": {
+                "type": "string",
+                "description": "raw: full HTTP/1.1 request text."
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "source_b": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "proxy",
+                  "agent",
+                  "sitemap",
+                  "raw"
+                ],
+                "description": "proxy = Burp Proxy history id; agent = agent-sent id; sitemap = url+method; raw = inline request."
+              },
+              "id": {
+                "description": "proxy: integer history id; agent: string agent id."
+              },
+              "url": {
+                "type": "string",
+                "description": "sitemap: full URL."
+              },
+              "method": {
+                "type": "string",
+                "description": "sitemap: HTTP method (default GET)."
+              },
+              "request": {
+                "type": "string",
+                "description": "raw: full HTTP/1.1 request text."
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "part": {
+            "type": "string",
+            "enum": [
+              "all",
+              "request",
+              "response"
+            ]
+          }
+        },
+        "required": [
+          "source_a",
+          "source_b"
+        ]
+      }
+    },
+    {
+      "name": "param_discover",
+      "group": "tamper",
+      "description": "Hidden-parameter mining on a request: probes a candidate wordlist (debug, verbose, admin, internal, ...) one param at a time, detects reflection / error / behavior deltas vs baseline. Hits feed tamper_matrix_build.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "proxy",
+                  "agent",
+                  "sitemap",
+                  "raw"
+                ],
+                "description": "proxy = Burp Proxy history id; agent = agent-sent id; sitemap = url+method; raw = inline request."
+              },
+              "id": {
+                "description": "proxy: integer history id; agent: string agent id."
+              },
+              "url": {
+                "type": "string",
+                "description": "sitemap: full URL."
+              },
+              "method": {
+                "type": "string",
+                "description": "sitemap: HTTP method (default GET)."
+              },
+              "request": {
+                "type": "string",
+                "description": "raw: full HTTP/1.1 request text."
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "raw_request": {
+            "type": "string"
+          },
+          "params": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "candidate names (default built-in list)."
+          },
+          "max": {
+            "type": "integer",
+            "description": "cap probes (default 12)."
+          },
+          "canary_value": {
+            "type": "string",
+            "description": "marker value to detect reflection."
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note"
+        ]
+      }
+    },
+    {
+      "name": "oob_register",
+      "group": "oob",
+      "description": "Register out-of-band payloads (Burp Collaborator via the bridge) with TTL + correlation bookkeeping in oob.json. Register BEFORE the first payload of any OOB-capable class (SSRF/RCE/XXE/JNDI/deserialization); no blind claim without a callback.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "payloads to register (default 1)."
+          },
+          "ttl_minutes": {
+            "type": "integer",
+            "description": "poll window (default 60)."
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "oob_poll",
+      "group": "oob",
+      "description": "Poll registered OOB payloads and correlate interactions back to the probes that planted them; records polls in oob.json. Final poll before closure is enforced by closure_check (condition oob_final_poll).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "payload_id": {
+            "type": "string",
+            "description": "one payload (omit to poll all live registrations)."
+          },
+          "wait_seconds": {
+            "type": "integer"
+          },
+          "interaction_type": {
+            "type": "string",
+            "enum": [
+              "dns",
+              "http",
+              "smtp"
+            ]
+          },
+          "since": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "sequence_next",
+      "group": "mission_control",
+      "description": "Layer 11 sequence gate: returns the mission phase (0-bootstrap..5-report), the next legal step, and the gate readout (recon debt = 0 before progress claims; budget exhausted blocks testing but never validation/report; paused missions yield no work).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "closure_check",
+      "group": "mission_control",
+      "description": "The 7-condition closure gate: coverage complete, tamper ladder complete, OOB final poll, >=2 auth contexts, evidence refs, validator sign-off on high+, skim detection (tool calls per coverage cell, probes per param). can_close=false -> verdict incomplete(reason); no_findings_complete is an earned conclusion, never an exit.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "restrict the check to one endpoint key."
+          },
+          "strict": {
+            "type": "boolean",
+            "description": "promote warnings to failures."
+          }
+        }
+      }
     }
   ]
 }
